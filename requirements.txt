@@ -1,0 +1,8 @@
+
+streamlit==1.38.0
+folium
+streamlit-folium
+openai
+bcrypt
+python-docx
+streamlit-searchbox

@@ -1,0 +1,49 @@
+{
+  "lična karta": {
+    "alias": [
+      "licna karta",
+      "ličnu kartu",
+      "ličnoj karti",
+      "ID card"
+    ],
+    "dokumenta": [
+      "Izvod iz matične knjige rođenih (original ili ovjerena kopija)",
+      "Uvjerenje o prebivalištu",
+      "Stara lična karta (ako postoji)"
+    ],
+    "taksa_eur": 5.0,
+    "uplata": "Žiro račun MUP CG: 832-12345-99; svrha uplate: 'Izrada lične karte'",
+    "rok_izrade_dana": 7
+  },
+  "pasoš": {
+    "alias": [
+      "pasos",
+      "pasoš",
+      "putna isprava",
+      "passport"
+    ],
+    "dokumenta": [
+      "Lična karta",
+      "Uplatnica za pasoš"
+    ],
+    "taksa_eur": 33.0,
+    "uplata": "Žiro račun MUP CG: 832-12345-00; svrha uplate: 'Izdavanje pasoša'",
+    "rok_izrade_dana": 10
+  },
+  "vozačka dozvola": {
+    "alias": [
+      "vozacka dozvola",
+      "vozačku",
+      "driver license",
+      "vozačka"
+    ],
+    "dokumenta": [
+      "Lična karta",
+      "Ljekarsko uvjerenje (važeće)",
+      "Fotografija (biometrijski format)"
+    ],
+    "taksa_eur": 20.0,
+    "uplata": "Žiro račun MUP CG: 832-12345-77; svrha uplate: 'Vozačka dozvola'",
+    "rok_izrade_dana": 7
+  }
+}

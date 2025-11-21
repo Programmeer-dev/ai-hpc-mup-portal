@@ -1,0 +1,23 @@
+[
+  {
+    "naziv": "MUP Podgorica – Ulica Kralja Nikole 61",
+    "grad": "Podgorica",
+    "lat": 42.441,
+    "lon": 19.262,
+    "radno_vrijeme": "08:00–15:00"
+  },
+  {
+    "naziv": "MUP Danilovgrad – Ulica Nikole Tesle 14",
+    "grad": "Danilovgrad",
+    "lat": 42.553,
+    "lon": 19.11,
+    "radno_vrijeme": "08:00–14:30"
+  },
+  {
+    "naziv": "MUP Nikšić – Trg Šaka Petrovića 2",
+    "grad": "Nikšić",
+    "lat": 42.774,
+    "lon": 18.944,
+    "radno_vrijeme": "08:00–14:30"
+  }
+]
