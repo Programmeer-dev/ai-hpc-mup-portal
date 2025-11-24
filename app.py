@@ -3,14 +3,18 @@ from utils import load_rules, load_centers, detect_service, google_maps_link, ge
 from queue_sim import estimate_wait_minutes, next_best_slot
 from word_generator import generate_docx_confirmation
 from hpc_queue_predictor import predict_best_arrival_time
-from id_card_parser import get_municipality_from_id, parse_id_card_number
+from municipality_utils import get_all_municipalities
 from datetime import datetime
-from database.database import init_db, create_user, authenticate_user, get_user_email, get_user_city, set_user_city, save_query, get_user_queries, set_id_card_number, get_id_card_number
+from database.database import init_db, create_user, authenticate_user, get_user_email, get_user_city, set_user_city, save_query, get_user_queries
 from streamlit_searchbox import st_searchbox
 import json, os
 import folium
 from streamlit_folium import st_folium
 from ai_chatbot import chat_with_ai, init_openai, get_fallback_response
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 init_db()
 
@@ -66,16 +70,54 @@ def generate_reply(user_msg):
     return "\n".join(reply_parts)
 
 st.set_page_config(
-    page_title="AI-HPC Gateway – MUP asistent", 
-    page_icon="🤖",
+    page_title="MUP Portal Crne Gore", 
+    page_icon="🇲🇪",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# Custom CSS za login stranicu
+st.markdown("""
+<style>
+
+    /* Login page styling */
+    .login-header {
+        text-align: center;
+        padding: 2rem 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 15px;
+        margin-bottom: 2rem;
+        color: white;
+    }
+    .login-header h1 {
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+    .login-header p {
+        margin: 0.5rem 0 0 0;
+        opacity: 0.9;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+        justify-content: center;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding: 1rem 2rem;
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Ako korisnik nije prijavljen, prikaži login/register stranicu
 if not st.session_state.user:
-    st.title("🔐 Prijava na MUP Portal")
-    st.caption("Molimo prijavite se ili registrujte da nastavite")
+    st.markdown("""
+    <div class="login-header">
+        <h1>🇲🇪 MUP Portal Crne Gore</h1>
+        <p>Digitalni asistent za administrativne usluge</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Dodaj session state za praćenje uspješne registracije
     if "registration_success" not in st.session_state:
@@ -119,18 +161,14 @@ if not st.session_state.user:
             st.subheader("Registracija")
             new_username = st.text_input("Korisničko ime")
             new_email = st.text_input("Email")
-            new_id_card = st.text_input("Broj lične karte", 
-                                        help="Unesite broj lične karte - automatski ćemo detektovati vašu opštinu")
+            
+            # Manuelni izbor opštine
+            municipalities = get_all_municipalities()
+            new_municipality = st.selectbox("Opština prebivališta", municipalities, 
+                                           help="Izaberite opštinu iz koje ste")
+            
             new_password = st.text_input("Lozinka", type="password")
             new_password2 = st.text_input("Potvrdi lozinku", type="password")
-            
-            # Real-time preview opštine dok korisnik kuca
-            if new_id_card:
-                id_result = parse_id_card_number(new_id_card)
-                if id_result['valid']:
-                    st.success(f"✅ Detektovana opština: **{id_result['municipality']}**")
-                else:
-                    st.warning(f"⚠️ {id_result['error']}")
             
             submit_reg = st.form_submit_button("Registruj se", use_container_width=True)
             
@@ -139,29 +177,23 @@ if not st.session_state.user:
                     st.error("Lozinke se ne poklapaju")
                 elif len(new_password) < 6:
                     st.error("Lozinka mora imati najmanje 6 karaktera")
-                elif not new_username or not new_email or not new_id_card:
+                elif not new_username or not new_email:
                     st.error("Molimo popunite sva polja")
                 else:
-                    # Validiraj ličnu kartu
-                    id_result = parse_id_card_number(new_id_card)
-                    if not id_result['valid']:
-                        st.error(f"Nevažeći broj lične karte: {id_result['error']}")
+                    if create_user(new_username, new_password, new_email):
+                        # Sačuvaj opštinu
+                        set_user_city(new_username, new_municipality)
+                        
+                        st.success(f"✅ Uspješna registracija! Dobrodošli **{new_username}**!")
+                        st.info(f"📍 Vaša opština: **{new_municipality}**")
+                        st.balloons()
+                        
+                        # Automatski prijavi korisnika
+                        st.session_state.user = new_username
+                        st.session_state.user_city = new_municipality
+                        st.rerun()
                     else:
-                        if create_user(new_username, new_password, new_email):
-                            # Sačuvaj broj lične karte i automatski postavi grad
-                            set_id_card_number(new_username, new_id_card)
-                            set_user_city(new_username, id_result['municipality'])
-                            
-                            st.success(f"✅ Uspješna registracija! Dobrodošli **{new_username}**!")
-                            st.info(f"� Vaša opština: **{id_result['municipality']}**")
-                            st.balloons()
-                            
-                            # Automatski prijavi korisnika
-                            st.session_state.user = new_username
-                            st.session_state.user_city = id_result['municipality']
-                            st.rerun()
-                        else:
-                            st.error("Korisničko ime već postoji")
+                        st.error("Korisničko ime već postoji")
     
     st.stop()  # Zaustavi izvršavanje dalje - ne prikazuj aplikaciju
 
@@ -169,37 +201,192 @@ if not st.session_state.user:
 
 st.markdown("""
 <style>
-/* Responsivni CSS */
-.badge { display:inline-block; padding:6px 10px; border-radius:999px;
-         background:#eef2ff; color:#1e40af; font-weight:600; margin-right:8px; }
-.badge.warn { background:#fff7ed; color:#9a3412; }
-.badge.ok   { background:#ecfdf5; color:#065f46; }
-.card { border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:14px 16px; margin-top:10px; }
-.card h3 { margin:0 0 6px 0; }
-ul.clean { margin:6px 0 0 0; padding-left:18px; }
-a.map { text-decoration:none; font-weight:600; }
-.kv { display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 0 0;}
-hr.soft { border:none; border-top:1px solid rgba(255,255,255,0.12); margin:14px 0; }
-
-/* Mobile optimizacija */
-@media (max-width: 768px) {
-    .stButton button { font-size: 14px !important; padding: 8px 12px !important; }
-    h1 { font-size: 24px !important; }
-    h2 { font-size: 20px !important; }
-    h3 { font-size: 18px !important; }
-    .stMetric { font-size: 14px !important; }
+/* Modern professional design */
+:root {
+    --primary: #667eea;
+    --secondary: #764ba2;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --dark: #1f2937;
+    --light: #f3f4f6;
 }
 
-/* Tablet optimizacija */
-@media (min-width: 769px) and (max-width: 1024px) {
-    .stButton button { font-size: 15px !important; }
-    h1 { font-size: 28px !important; }
+/* Main header */
+.main-header {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+    padding: 2rem;
+    border-radius: 20px;
+    margin-bottom: 2rem;
+    box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+}
+
+.main-header h1 {
+    color: white;
+    margin: 0;
+    font-size: 2.5rem;
+    font-weight: 700;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+}
+
+.main-header p {
+    color: rgba(255,255,255,0.9);
+    margin: 0.5rem 0 0 0;
+    font-size: 1.1rem;
+}
+
+/* Cards and badges */
+.service-card {
+    background: white;
+    border-radius: 15px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    border-left: 4px solid var(--primary);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.service-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 15px rgba(0,0,0,0.15);
+}
+
+.badge {
+    display: inline-block;
+    padding: 0.4rem 0.8rem;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 0.2rem;
+}
+
+.badge-primary { background: #dbeafe; color: #1e40af; }
+.badge-success { background: #d1fae5; color: #065f46; }
+.badge-warning { background: #fef3c7; color: #92400e; }
+.badge-danger { background: #fee2e2; color: #991b1b; }
+
+/* Buttons enhancement */
+.stButton > button {
+    border-radius: 10px;
+    font-weight: 600;
+    transition: all 0.3s;
+    border: none;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+/* Sidebar styling - Modern dark theme */
+.css-1d391kg, [data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1a1f2e 0%, #0f1419 100%);
+}
+
+[data-testid="stSidebar"] > div:first-child {
+    background: linear-gradient(180deg, #1a1f2e 0%, #0f1419 100%);
+}
+
+/* Sidebar text colors */
+[data-testid="stSidebar"] * {
+    color: #e2e8f0 !important;
+}
+
+[data-testid="stSidebar"] .stMarkdown {
+    color: #e2e8f0;
+}
+
+/* Sidebar buttons */
+[data-testid="stSidebar"] .stButton > button {
+    background: rgba(102, 126, 234, 0.1);
+    border: 1px solid rgba(102, 126, 234, 0.3);
+    color: #a5b4fc !important;
+    transition: all 0.3s;
+}
+
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(102, 126, 234, 0.2);
+    border-color: rgba(102, 126, 234, 0.5);
+    transform: translateX(5px);
+}
+
+/* Info boxes */
+.stInfo, .stSuccess, .stWarning, .stError {
+    border-radius: 12px;
+    border-left-width: 5px;
+}
+
+/* Chat messages */
+.chat-message {
+    padding: 1rem;
+    border-radius: 12px;
+    margin: 0.5rem 0;
+    animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.user-message {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    margin-left: 20%;
+}
+
+.bot-message {
+    background: #f3f4f6;
+    color: #1f2937;
+    margin-right: 20%;
+    border: 1px solid #e5e7eb;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .main-header h1 { font-size: 1.8rem; }
+    .main-header { padding: 1.5rem; }
+    .service-card { padding: 1rem; }
+    .user-message, .bot-message { margin: 0.5rem 0; }
+}
+
+/* Map container */
+.map-container {
+    border-radius: 15px;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    margin: 1rem 0;
+}
+
+/* Stats boxes */
+.stat-box {
+    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+    padding: 1.5rem;
+    border-radius: 12px;
+    text-align: center;
+    border: 2px solid #bae6fd;
+}
+
+.stat-box h3 {
+    color: var(--primary);
+    margin: 0;
+    font-size: 2rem;
+}
+
+.stat-box p {
+    color: #64748b;
+    margin: 0.5rem 0 0 0;
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🤖 AI-HPC Gateway – MUP asistent (prototip)")
-st.caption("Demo: digitalni most između građana i MUP sistema – informativni chatbot + simulacija reda (HPC light)")
+# Header sa modernim dizajnom
+st.markdown("""
+<div class="main-header">
+    <h1>🇲🇪 MUP Portal Crne Gore</h1>
+    <p>Pametni asistent za administrativne usluge i informacije</p>
+</div>
+""", unsafe_allow_html=True)
 
 rules = load_rules("data/mup_rules.json")
 
@@ -208,19 +395,31 @@ user_city = st.session_state.user_city if st.session_state.user else None
 centers = load_centers("data/centers.json", city=user_city)
 
 with st.sidebar:
-    st.markdown(f"👤 Prijavljeni kao **{st.session_state.user}**")
+    # User profile box - Glassmorphism style
+    st.markdown(f"""
+    <div style="background: rgba(102, 126, 234, 0.15); 
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(102, 126, 234, 0.3);
+                padding: 1.5rem; 
+                border-radius: 20px; 
+                margin-bottom: 1.5rem;
+                box-shadow: 0 8px 32px 0 rgba(102, 126, 234, 0.2);">
+        <div style="display: flex; align-items: center; gap: 1rem;">
+            <div style="width: 50px; height: 50px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        border-radius: 50%; display: flex; align-items: center; justify-content: center;
+                        font-size: 1.5rem; box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);">
+                👤
+            </div>
+            <div>
+                <h3 style="margin: 0; font-size: 1.3rem; color: #fff; font-weight: 700;">{st.session_state.user}</h3>
+                <p style="margin: 0.3rem 0 0 0; color: #a5b4fc; font-size: 0.85rem;">MUP Portal</p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Prikaži info o broju lične karte ako postoji
-    id_card = get_id_card_number(st.session_state.user)
-    if id_card:
-        id_result = parse_id_card_number(id_card)
-        if id_result['valid']:
-            st.caption(f"🪪 Opština: **{id_result['municipality']}** (iz lične karte)")
-        else:
-            st.caption(f"🪪 Lična karta: {id_card}")
-    
-    # Dugme za odjavu odmah ispod imena
-    if st.button("🚪 Odjavi se", use_container_width=True):
+    # Dugme za odjavu
+    if st.button("🚪 Odjavi se", use_container_width=True, type="secondary"):
         if os.path.exists("data/session.json"):
             os.remove("data/session.json")
         st.session_state.user = None
@@ -228,62 +427,81 @@ with st.sidebar:
         st.session_state.page = "login"
         st.rerun()
     
-    # Automatski postavi grad iz lične karte
-    st.markdown("---")
+    st.markdown("""
+    <div style="height: 1px; background: linear-gradient(90deg, transparent 0%, rgba(102, 126, 234, 0.3) 50%, transparent 100%); margin: 1.5rem 0;"></div>
+    """, unsafe_allow_html=True)
     
-    # Ako korisnik ima ličnu kartu, automatski postavi grad iz nje
-    if id_card:
-        id_result = parse_id_card_number(id_card)
-        if id_result['valid']:
-            # Ažuriraj grad samo ako se promijenio
-            if st.session_state.user_city != id_result['municipality']:
-                st.session_state.user_city = id_result['municipality']
-                set_user_city(st.session_state.user, id_result['municipality'])
-            
-            # Prikaži samo info bez dropdown-a
-            st.info(f"📍 **Vaša opština:** {id_result['municipality']}")
-            st.caption("(automatski detektovano iz lične karte)")
+    # Učitaj opštinu iz baze ako nije učitana
+    if not st.session_state.user_city:
+        st.session_state.user_city = get_user_city(st.session_state.user)
+    
+    # Prikaži opštinu - Modern card
+    if st.session_state.user_city:
+        st.markdown(f"""
+        <div style="background: rgba(59, 130, 246, 0.1); 
+                    backdrop-filter: blur(10px);
+                    border: 1px solid rgba(59, 130, 246, 0.3);
+                    padding: 1.2rem; 
+                    border-radius: 15px;
+                    position: relative;
+                    overflow: hidden;">
+            <div style="position: absolute; top: -20px; right: -20px; width: 80px; height: 80px;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        border-radius: 50%; opacity: 0.1;"></div>
+            <p style="margin: 0; color: #60a5fa; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px;">📍 Vaša opština</p>
+            <p style="margin: 0.5rem 0 0 0; color: #fff; font-size: 1.2rem; font-weight: 700;">
+                {st.session_state.user_city}
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        # Ako nema lične karte, ponudi izbor
-        st.markdown("📍 **Izaberite grad:**")
-        all_cities = get_all_cities()
-        
-        if not st.session_state.user_city:
-            st.session_state.user_city = all_cities[0]
-            set_user_city(st.session_state.user, all_cities[0])
-        
-        current_city_index = all_cities.index(st.session_state.user_city) if st.session_state.user_city in all_cities else 0
-        selected_city = st.selectbox(
-            "Grad",
-            all_cities,
-            index=current_city_index,
-            label_visibility="collapsed"
-        )
-        
-        # Ako je promijenjen grad, ažuriraj
-        if selected_city != st.session_state.user_city:
-            st.session_state.user_city = selected_city
-            set_user_city(st.session_state.user, selected_city)
-            st.rerun()
+        st.warning("⚠️ Opština nije postavljena")
     
-    st.markdown("---")
-    st.header("⚙️ Podešavanja simulacije")
+    st.markdown("""
+    <div style="height: 1px; background: linear-gradient(90deg, transparent 0%, rgba(102, 126, 234, 0.3) 50%, transparent 100%); margin: 1.5rem 0;"></div>
+    """, unsafe_allow_html=True)
+    
+    # Settings header sa ikonom
+    st.markdown("""
+    <div style="margin-bottom: 1rem;">
+        <h3 style="color: #fff; font-size: 1.1rem; font-weight: 700; margin: 0;">
+            ⚙️ Podešavanja simulacije
+        </h3>
+        <p style="color: #94a3b8; font-size: 0.8rem; margin: 0.3rem 0 0 0;">
+            Queue teorija parametri
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
     arrival = st.slider("Dolazaka na sat (λ)", 5, 40, 18)
     service = st.slider("Usluženi na sat (μ)", 5, 40, 20)
     qsize = st.slider("Trenutno u redu", 0, 40, 12)
 
-# Toggle između chatbot i klasičnog moda
-col_mode1, col_mode2 = st.columns(2)
+# Moderni toggle buttons
+st.markdown("""
+<div style="background: #f8fafc; padding: 0.5rem; border-radius: 15px; margin: 1.5rem 0;">
+</div>
+""", unsafe_allow_html=True)
+
+col_mode1, col_mode2 = st.columns(2, gap="medium")
 with col_mode1:
-    if st.button("💬 AI Chatbot Mod", use_container_width=True, type="primary" if st.session_state.chat_mode else "secondary"):
+    button_style = "primary" if st.session_state.chat_mode else "secondary"
+    if st.button("💬 AI Chatbot", use_container_width=True, type=button_style):
         st.session_state.chat_mode = True
+        # Resetuj kontekst i istoriju chat-a
+        st.session_state.chat_messages = []
+        st.session_state.conversation_context = {}
         st.rerun()
 with col_mode2:
-    if st.button("🔍 Klasična Pretraga", use_container_width=True, type="secondary" if st.session_state.chat_mode else "primary"):
+    button_style = "primary" if not st.session_state.chat_mode else "secondary"
+    if st.button("🔍 Klasična Pretraga", use_container_width=True, type=button_style):
         st.session_state.chat_mode = False
+        # Resetuj kontekst i istoriju chat-a
+        st.session_state.chat_messages = []
+        st.session_state.conversation_context = {}
         st.rerun()
 
-st.markdown("---")
+st.markdown("<br>", unsafe_allow_html=True)
 
 # Preuzmi historiju upita ako je korisnik prijavljen
 previous_queries = []
@@ -295,12 +513,12 @@ if st.session_state.user:
 if st.session_state.chat_mode:
     st.subheader("🤖 AI Chatbot Asistent")
     
-    # Proveri da li je OpenAI API key podešen
-    openai_ready = init_openai()
+    # Privremeno isključi OpenAI zbog API limita - koristi samo fallback
+    openai_ready = False  # Biće True kada dobiješ novi API key
     
     if not openai_ready:
-        st.warning("⚠️ OpenAI API key nije podešen. Koristiću jednostavan keyword matching mode.")
-        st.caption("Da aktiviraš pravi AI chatbot, dodaj OPENAI_API_KEY u environment variables.")
+        st.info("🤖 Koristim napredni keyword matching sistem (bez OpenAI API-ja)")
+        st.caption("💡 Pitaj me o: ličnoj karti, pašošu, vozačkoj dozvoli, promjeni prebivališta")
     
     # Chat container
     chat_container = st.container(height=400)
@@ -311,7 +529,9 @@ if st.session_state.chat_mode:
             st.info("👋 Zdravo! Pitaj me bilo šta o MUP uslugama - ličnoj karti, pašošu, vozačkoj dozvoli...")
         
         for msg in st.session_state.chat_messages:
-            with st.chat_message(msg["role"]):
+            # Custom avatari
+            avatar = "👤" if msg["role"] == "user" else "🤖"
+            with st.chat_message(msg["role"], avatar=avatar):
                 st.markdown(msg["content"])
     
     # Prikaži mapu u chatu ako je zatraženo
@@ -373,12 +593,12 @@ if st.session_state.chat_mode:
         
         # Prikazi korisničku poruku
         with chat_container:
-            with st.chat_message("user"):
+            with st.chat_message("user", avatar="👤"):
                 st.markdown(prompt)
         
         # Generiši AI odgovor
         with chat_container:
-            with st.chat_message("assistant"):
+            with st.chat_message("assistant", avatar="🤖"):
                 # Cool loading animacija
                 loading_messages = [
                     "🤔 Analiziram upit...",

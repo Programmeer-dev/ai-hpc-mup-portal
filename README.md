@@ -1,38 +1,38 @@
+﻿#  AI-HPC Gateway  MUP Portal Asistent
 
-# AI-HPC Gateway – MUP asistent (Prototip)
+Inteligentni asistent za MUP (Ministarstvo unutrašnjih poslova) Crne Gore sa naprednim funkcijama za građane.
 
-Ovo je minimalni MVP za demonstraciju:
-- Chatbot koji odgovara na česta pitanja: šta je potrebno za ličnu kartu/pasoš/vozačku, takse i uplate.
-- Lista najbližih MUP centara uz linkove za mape.
-- *HPC light* simulacija reda (procjena čekanja i predlog vremena dolaska).
+##  Funkcionalnosti
 
-## Pokretanje lokalno
+###  Autentifikacija i Personalizacija
+- **Registracija/Login** sa sigurnim hash-ovanjem lozinki (bcrypt)
+- **Izbor opštine** pri registraciji (23 opštine Crne Gore)
+- Personalizovani prikaz MUP centara po opštini
+- Čuvanje istorije upita korisnika
+
+###  AI Chatbot Mod
+- **Napredni keyword matching sistem** - radi bez OpenAI API-ja
+- Pametno prepoznavanje konteksta razgovora
+- Podrška za follow-up pitanja
+- Normalizacija ćiriličnih karaktera (š, đ, č, ć, ž)
+
+###  Klasična Pretraga
+- Pretraga MUP usluga po ključnim riječima
+- Prikaz svih informacija o uslugama
+
+###  Mapa MUP Centara
+- **Interaktivna mapa** sa Folium bibliotekom
+- Automatski prikaz centara za opštinu korisnika
+
+###  HPC Queue Simulator
+- **Predviđanje čekanja** u redu
+- Simulacija queue teorije
+
+##  Pokretanje
+
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Deployment (brzo)
-- **Streamlit Community Cloud** (besplatno): repo → *New app* → `app.py`
-- **Hugging Face Spaces**: izaberi *Streamlit* template, uploduj fajlove
-
-## Struktura
-```
-ai-hpc-gateway-prototype/
-├── app.py
-├── queue_sim.py
-├── utils.py
-├── requirements.txt
-└── data/
-    ├── mup_rules.json
-    └── centers.json
-```
-
-## Ideje za naredne iteracije (prezentabilno do 5. decembra)
-1. Dodati 6–10 usluga (boravišna dozvola, prebivalište, promjena adrese...).
-2. Uvesti jednostavnu rezervaciju termina (virtuelni broj + e-mail podsjetnik).
-3. Logovanje upita (CSV) i osnovna analitika u sidebaru.
-4. Opcioni *Ray/Dask* modul za simulacije po gradovima.
-5. UI poliranje (logo, boje, potvrde).
-
-> Napomena: Svi podaci u `data/` su demo. Provjeru i ažuriranje taksi/pravila vršiti prema zvaničnim izvorima.
+**Verzija:** 1.0.0
