@@ -202,3 +202,105 @@ def get_all_centers():
         {"naziv": name, "radno_vrijeme": time, "lat": lat, "lon": lon}
         for name, time, lat, lon in rows
     ]
+
+# ============================================
+# ANALYTICS FUNKCIJE
+# ============================================
+
+def get_service_stats():
+    """
+    Vraća statistiku po uslugama - koliko puta je svaka usluga pretražena
+    OBJAŠNJENJE: Brojimo koliko puta se pojavljuje svaki servis u 'queries' tabeli
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT service, COUNT(*) as count 
+        FROM queries 
+        WHERE service IS NOT NULL 
+        GROUP BY service 
+        ORDER BY count DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return [{"service": s, "count": c} for s, c in rows]
+
+def get_queries_by_city():
+    """
+    Vraća broj upita po gradovima (iz users.city)
+    OBJAŠNJENJE: JOIN queries sa users da dobijem grad svakog korisnika
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT u.city, COUNT(q.id) as count 
+        FROM queries q
+        JOIN users u ON q.username = u.username
+        WHERE u.city IS NOT NULL
+        GROUP BY u.city
+        ORDER BY count DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return [{"city": c, "count": cnt} for c, cnt in rows]
+
+def get_queries_by_time():
+    """
+    Vraća broj upita po satima dana
+    OBJAŠNJENJE: Izvlačim sat iz created_at timestampa i grupiram
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT 
+            CAST(strftime('%H', created_at) AS INTEGER) as hour,
+            COUNT(*) as count
+        FROM queries
+        GROUP BY hour
+        ORDER BY hour
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return [{"hour": h, "count": c} for h, c in rows]
+
+def get_total_stats():
+    """
+    Vraća ukupne statistike sistema
+    OBJAŠNJENJE: Brojimo ukupno korisnika i upita
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    # Ukupno korisnika
+    cur.execute("SELECT COUNT(*) FROM users")
+    total_users = cur.fetchone()[0]
+    
+    # Ukupno upita
+    cur.execute("SELECT COUNT(*) FROM queries")
+    total_queries = cur.fetchone()[0]
+    
+    # Upiti danas
+    from datetime import date
+    today = date.today().strftime('%Y-%m-%d')
+    cur.execute("SELECT COUNT(*) FROM queries WHERE DATE(created_at) = ?", (today,))
+    queries_today = cur.fetchone()[0]
+    
+    # Najaktivniji korisnik
+    cur.execute("""
+        SELECT username, COUNT(*) as count 
+        FROM queries 
+        GROUP BY username 
+        ORDER BY count DESC 
+        LIMIT 1
+    """)
+    top_user_row = cur.fetchone()
+    top_user = top_user_row[0] if top_user_row else "N/A"
+    
+    conn.close()
+    
+    return {
+        "total_users": total_users,
+        "total_queries": total_queries,
+        "queries_today": queries_today,
+        "top_user": top_user
+    }

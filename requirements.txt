@@ -6,3 +6,4 @@ openai
 bcrypt
 python-docx
 streamlit-searchbox
+plotly

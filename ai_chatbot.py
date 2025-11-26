@@ -105,6 +105,45 @@ def normalize_text(text: str) -> str:
         normalized = normalized.replace(special, normal)
     return normalized
 
+def get_accusative_form(service: str) -> str:
+    """
+    Vrati akuzativ formu servisa (za 'uplatim', 'izvadim', 'obnovim'...)
+    Akuzativ = odgovara na pitanje KOGA? ŠTA?
+    """
+    accusative_forms = {
+        'lična karta': 'ličnu kartu',
+        'pasoš': 'pasoš',
+        'vozačka dozvola': 'vozačku dozvolu',
+        'promjena prebivališta': 'promjenu prebivališta'
+    }
+    return accusative_forms.get(service, service)
+
+def get_genitive_form(service: str) -> str:
+    """
+    Vrati genitiv formu servisa (za 'izrada', 'rok', 'cijena'...)
+    Genitiv = odgovara na pitanje KOGA? ČEGA?
+    """
+    genitive_forms = {
+        'lična karta': 'lične karte',
+        'pasoš': 'pasoša',
+        'vozačka dozvola': 'vozačke dozvole',
+        'promjena prebivališta': 'promjene prebivališta'
+    }
+    return genitive_forms.get(service, service)
+
+def get_locative_form(service: str) -> str:
+    """
+    Vrati lokativ formu servisa (za 'o', 'pri', 'na'...)
+    Lokativ = odgovara na pitanje O KOME? O ČEMU?
+    """
+    locative_forms = {
+        'lična karta': 'ličnoj karti',
+        'pasoš': 'pašošu',
+        'vozačka dozvola': 'vozačkoj dozvoli',
+        'promjena prebivališta': 'promjeni prebivališta'
+    }
+    return locative_forms.get(service, service)
+
 def get_smart_response(user_message: str, rules: dict, centers: list = None, context: dict = None, user_city: str = None) -> str:
     """
     Pametan odgovor sa kontekstom i personalizacijom
@@ -115,21 +154,22 @@ def get_smart_response(user_message: str, rules: dict, centers: list = None, con
     user_lower = user_message.lower()
     user_normalized = normalize_text(user_lower)
     
-    # Provjeri da li je ovo follow-up pitanje (npr. "a koliko košta?")
-    if any(word in user_normalized for word in ["a ", "i ", "to", "onda", "jos"]):
+    # Provjeri da li je ovo follow-up pitanje (npr. "a koliko košta" ili samo "koliko kosta")
+    if any(word in user_normalized for word in ["a ", "i ", "to", "onda", "jos", "kost", "cijen"]):
         if 'last_service' in context:
             # Odnosi se na prethodni servis
             service = context['last_service']
             if service in rules:
                 info = rules[service]
                 
-                # Detektuj šta se pita
-                if any(word in user_normalized for word in ["kost", "cijen", "taksa", "plat"]):
+                # Detektuj šta se pita - sa i bez znaka pitanja
+                if any(word in user_normalized for word in ["kost", "cijen", "taksa", "plat", "placa"]):
                     return f"💶 **{service.title()}** košta **{info['taksa_eur']} €**\n\n🏦 Uplata: {info['uplata']}"
-                elif any(word in user_normalized for word in ["koliko", "rok", "dan", "traje"]):
+                elif any(word in user_normalized for word in ["koliko", "rok", "dan", "traje", "dug"]):
                     return f"⏱️ **{service.title()}** se radi oko **{info['rok_izrade_dana']} dana**"
-                elif any(word in user_normalized for word in ["dokument", "treba", "potrebn"]):
-                    return f"📄 **Dokumenta za {service}:**\n\n" + "\n".join([f"• {doc}" for doc in info['dokumenta']])
+                elif any(word in user_normalized for word in ["dokument", "treba", "potrebn", "dokum"]):
+                    service_acc = get_accusative_form(service)
+                    return f"📄 **Dokumenta za {service_acc}:**\n\n" + "\n".join([f"• {doc}" for doc in info['dokumenta']])
     
     # Inače koristi standardnu detekciju
     return get_fallback_response(user_message, rules, centers, user_city)
@@ -141,35 +181,32 @@ def get_fallback_response(user_message: str, rules: dict, centers: list = None, 
     user_lower = user_message.lower()
     user_normalized = normalize_text(user_lower)
     
-    # Detektuj tip upita - provjeri cijelu poruku, ne samo pitanja
-    asking_about_payment = any(word in user_normalized for word in ["uplat", "plat", "taksa", "gdje", "gde", "kako", "kost", "cijen", "cijena", "para"])
-    asking_about_documents = any(word in user_normalized for word in ["dokument", "potrebn", "treba", "sta", "šta", "nosit", "donij"])
-    asking_about_time = any(word in user_normalized for word in ["koliko", "rok", "dugo", "dan", "brzo", "kada", "kad", "traje"])
-    asking_about_location = any(word in user_normalized for word in ["gdje", "gde", "adres", "centar", "mup", "lokacij", "najbliz", "bliz"])
+    # Detektuj tip upita - prepoznaj i bez znaka pitanja, i sa normalizovanim slovima
+    asking_about_payment = any(word in user_normalized for word in ["uplat", "plat", "taksa", "gdje", "gde", "kako", "kost", "cijen", "para", "placa"])
+    asking_about_documents = any(word in user_normalized for word in ["dokument", "potrebn", "treba", "sta", "nosit", "donij", "dokum"])
+    asking_about_time = any(word in user_normalized for word in ["koliko", "rok", "dugo", "dan", "brzo", "kada", "kad", "traje", "dug"])
+    asking_about_location = any(word in user_normalized for word in ["gdje", "gde", "adres", "centar", "mup", "lokacij", "najbliz", "bliz", "lokacija"])
     
-    # Keyword detection - provjeri i originalni i normalizovani tekst
+    # Keyword detection - koristi normalizovani tekst za bolje prepoznavanje
     service = None
-    if any(word in user_lower for word in ["pasoš", "pasosh", "putni", "putna"]) or \
-       any(word in user_normalized for word in ["pasos", "pasosh", "putni", "putna"]):
+    if any(word in user_normalized for word in ["pasos", "pasosh", "putni", "putna", "paso"]):
         service = "pasoš"
-    elif any(word in user_lower for word in ["lična", "licna", "karta", "identifikacija"]) or \
-         any(word in user_normalized for word in ["licna", "karta", "identifikacija"]):
+    elif any(word in user_normalized for word in ["licna", "karta", "identifikacija", "licn"]):
         service = "lična karta"
-    elif any(word in user_lower for word in ["vozačka", "vozacka", "dozvola", "vozač", "vozac"]) or \
-         any(word in user_normalized for word in ["vozacka", "dozvola", "vozac"]):
+    elif any(word in user_normalized for word in ["vozacka", "dozvola", "vozac", "vozack"]):
         service = "vozačka dozvola"
-    elif any(word in user_lower for word in ["prebivalište", "prebivaliste", "adresa", "promjena", "promjena"]) or \
-         any(word in user_normalized for word in ["prebivaliste", "adresa", "promjena", "promena"]):
+    elif any(word in user_normalized for word in ["prebivaliste", "adresa", "promjena", "promena", "prebivalist"]):
         service = "promjena prebivališta"
     else:
-        return "🤖 Pitaj me o: ličnoj karti, pašošu, vozačkoj dozvoli ili promjeni prebivališta.\n\n💡 Mogu ti reći:\n- Koliko košta?\n- Gdje da uplatim?\n- Koja dokumenta su potrebna?\n- Koliko traje izrada?\n- Gdje je najbliži MUP?"
+        return "🤖 Pitaj me o: ličnoj karti, pasošu, vozačkoj dozvoli ili promjeni prebivališta.\n\n💡 Mogu ti reći:\n- Koliko košta?\n- Gdje da uplatim?\n- Koja dokumenta su potrebna?\n- Koliko traje izrada?\n- Gdje je najbliži MUP?"
     
     if service in rules:
         info = rules[service]
         
         # Specifičan odgovor na osnovu tipa pitanja
         if asking_about_payment:
-            return f"""💶 **Uplata za {service}**
+            service_acc = get_accusative_form(service)
+            return f"""💶 **Uplata za {service_acc}**
 
 **Cijena:** {info['taksa_eur']} €
 
@@ -179,7 +216,8 @@ def get_fallback_response(user_message: str, rules: dict, centers: list = None, 
 💡 Uplatu možeš izvršiti na bilo kojem pošanskom šalteru ili banci sa ovim podacima."""
         
         elif asking_about_documents:
-            return f"""📄 **Potrebna dokumenta za {service}**
+            service_acc = get_accusative_form(service)
+            return f"""📄 **Potrebna dokumenta za {service_acc}**
 
 Trebaće ti:
 {chr(10).join([f'• {doc}' for doc in info['dokumenta']])}
@@ -190,7 +228,8 @@ Trebaće ti:
 💡 Donesi sve dokumente u najbliži MUP centar!"""
         
         elif asking_about_time:
-            return f"""⏱️ **Rok izrade - {service}**
+            service_gen = get_genitive_form(service)
+            return f"""⏱️ **Rok izrade {service_gen}**
 
 **Vrijeme izrade:** {info['rok_izrade_dana']} dana
 
@@ -201,7 +240,8 @@ Trebaće ti:
         
         elif asking_about_location:
             # Personalizovani odgovor na osnovu grada korisnika
-            location_response = f"""📍 **MUP centri za {service}**
+            service_acc = get_accusative_form(service)
+            location_response = f"""📍 **MUP centri za {service_acc}**
 
 Možeš se obratiti u bilo koji MUP centar u Crnoj Gori.\n\n"""
             
@@ -219,7 +259,7 @@ Možeš se obratiti u bilo koji MUP centar u Crnoj Gori.\n\n"""
 • MUP Nikšić – Trg Šaka Petrovića 2 (08:00-14:30)
 • MUP Danilovgrad – Ulica Nikole Tesle 14 (08:00-14:30)"""
             
-            location_response += "\n\n💡 Koristi dugme '📍 Vidi na mapi' da vidiš tačne lokacije!"
+            location_response += "\n\n🗺️ **Mapa sa lokacijama prikazana ispod...**"
             return location_response
         
         else:
@@ -236,7 +276,7 @@ Možeš se obratiti u bilo koji MUP centar u Crnoj Gori.\n\n"""
 {info['uplata']}
 
 💡 Pitaj me specificnije:
-• "Gdje da uplatim {service}?"
+• "Gdje da uplatim {get_accusative_form(service)}?"
 • "Koliko košta {service}?"
 • "Koja dokumenta trebaju?"
 • "Gdje je najbliži MUP?"""
