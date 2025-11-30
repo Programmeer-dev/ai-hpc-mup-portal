@@ -7,3 +7,4 @@ bcrypt
 python-docx
 streamlit-searchbox
 plotly
+python-dotenv

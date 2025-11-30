@@ -154,22 +154,24 @@ def get_smart_response(user_message: str, rules: dict, centers: list = None, con
     user_lower = user_message.lower()
     user_normalized = normalize_text(user_lower)
     
-    # Provjeri da li je ovo follow-up pitanje (npr. "a koliko košta" ili samo "koliko kosta")
-    if any(word in user_normalized for word in ["a ", "i ", "to", "onda", "jos", "kost", "cijen"]):
-        if 'last_service' in context:
-            # Odnosi se na prethodni servis
-            service = context['last_service']
-            if service in rules:
-                info = rules[service]
-                
-                # Detektuj šta se pita - sa i bez znaka pitanja
-                if any(word in user_normalized for word in ["kost", "cijen", "taksa", "plat", "placa"]):
-                    return f"💶 **{service.title()}** košta **{info['taksa_eur']} €**\n\n🏦 Uplata: {info['uplata']}"
-                elif any(word in user_normalized for word in ["koliko", "rok", "dan", "traje", "dug"]):
-                    return f"⏱️ **{service.title()}** se radi oko **{info['rok_izrade_dana']} dana**"
-                elif any(word in user_normalized for word in ["dokument", "treba", "potrebn", "dokum"]):
-                    service_acc = get_accusative_form(service)
-                    return f"📄 **Dokumenta za {service_acc}:**\n\n" + "\n".join([f"• {doc}" for doc in info['dokumenta']])
+    # Provjeri da li je ovo follow-up pitanje - ako je servis već poznat u kontekstu
+    # i pitanje ne pominje eksplicitno drugi servis
+    has_service_mention = any(word in user_normalized for word in ["licna", "karta", "pasos", "vozacka", "dozvola", "prebivalist"])
+    
+    if 'last_service' in context and not has_service_mention:
+        # Follow-up pitanje se odnosi na prethodni servis
+        service = context['last_service']
+        if service in rules:
+            info = rules[service]
+            
+            # Detektuj šta se pita - sa i bez znaka pitanja
+            if any(word in user_normalized for word in ["kost", "cijen", "taksa", "plat", "placa"]):
+                return f"💶 **{service.title()}** košta **{info['taksa_eur']} €**\n\n🏦 Uplata: {info['uplata']}"
+            elif any(word in user_normalized for word in ["koliko", "rok", "dan", "traje", "dug", "izrad", "gotov", "ceka"]):
+                return f"⏱️ **{service.title()}** se radi za **{info['rok_izrade_dana']} radnih dana**\n\n📅 Od podnošenja zahtjeva do preuzimanja: {info['rok_izrade_dana']} dana\n\n💡 Rok može biti duži u periodu gužve."
+            elif any(word in user_normalized for word in ["dokument", "treba", "potrebn", "dokum"]):
+                service_acc = get_accusative_form(service)
+                return f"📄 **Dokumenta za {service_acc}:**\n\n" + "\n".join([f"• {doc}" for doc in info['dokumenta']])
     
     # Inače koristi standardnu detekciju
     return get_fallback_response(user_message, rules, centers, user_city)
@@ -184,7 +186,7 @@ def get_fallback_response(user_message: str, rules: dict, centers: list = None, 
     # Detektuj tip upita - prepoznaj i bez znaka pitanja, i sa normalizovanim slovima
     asking_about_payment = any(word in user_normalized for word in ["uplat", "plat", "taksa", "gdje", "gde", "kako", "kost", "cijen", "para", "placa"])
     asking_about_documents = any(word in user_normalized for word in ["dokument", "potrebn", "treba", "sta", "nosit", "donij", "dokum"])
-    asking_about_time = any(word in user_normalized for word in ["koliko", "rok", "dugo", "dan", "brzo", "kada", "kad", "traje", "dug"])
+    asking_about_time = any(word in user_normalized for word in ["koliko", "rok", "dugo", "dan", "brzo", "kada", "kad", "traje", "dug", "izrad", "gotov", "sprem", "ceka", "cekanj"])
     asking_about_location = any(word in user_normalized for word in ["gdje", "gde", "adres", "centar", "mup", "lokacij", "najbliz", "bliz", "lokacija"])
     
     # Keyword detection - koristi normalizovani tekst za bolje prepoznavanje
@@ -231,12 +233,14 @@ Trebaće ti:
             service_gen = get_genitive_form(service)
             return f"""⏱️ **Rok izrade {service_gen}**
 
-**Vrijeme izrade:** {info['rok_izrade_dana']} dana
+✅ **{service.title()} se radi za {info['rok_izrade_dana']} dana**
+
+📅 Od dana podnošenja zahtjeva do preuzimanja dokumenta obično prođe **{info['rok_izrade_dana']} radnih dana**.
 
 💶 Cijena: {info['taksa_eur']} €
-📄 Dokumenta: {len(info['dokumenta'])} stavki
+📄 Potrebna dokumenta: {len(info['dokumenta'])} stavki
 
-💡 Rok može biti duži u periodu gužvi."""
+⚠️ Napomena: Rok može biti duži u periodu velike gužve (sezona, kraj godine)."""
         
         elif asking_about_location:
             # Personalizovani odgovor na osnovu grada korisnika

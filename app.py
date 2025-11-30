@@ -91,16 +91,31 @@ st.markdown("""
         transition: all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1) !important;
     }
     
-    /* Login page styling */
+    /* Login page styling sa animated background */
     .login-header {
         text-align: center;
         padding: 2rem 0;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(-45deg, #667eea, #764ba2, #f093fb, #4facfe);
+        background-size: 400% 400%;
+        animation: gradientShift 15s ease infinite, fadeInDown 0.6s ease-out;
         border-radius: 15px;
         margin-bottom: 2rem;
         color: white;
-        animation: fadeInDown 0.6s ease-out;
         box-shadow: 0 10px 40px rgba(102, 126, 234, 0.3);
+        position: relative;
+        overflow: hidden;
+    }
+    .login-header::before {
+        content: "";
+        position: absolute;
+        width: 200%;
+        height: 200%;
+        top: -50%;
+        left: -50%;
+        background: radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px);
+        background-size: 50px 50px;
+        animation: float 20s linear infinite;
+        opacity: 0.3;
     }
     .login-header h1 {
         margin: 0;
@@ -112,25 +127,46 @@ st.markdown("""
         opacity: 0.9;
     }
     
-    /* Tabs styling */
+    /* Tabs styling - Poboljšan dizajn */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
+        gap: 0;
         justify-content: center;
-        background: linear-gradient(to right, #f8f9fa, #ffffff);
-        padding: 1rem;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        background: transparent;
+        padding: 0;
+        border-bottom: 3px solid #e5e7eb;
+        margin-bottom: 2rem;
     }
     .stTabs [data-baseweb="tab"] {
-        padding: 1rem 2rem;
-        font-size: 1.1rem;
-        font-weight: 600;
-        border-radius: 8px;
+        padding: 1rem 3rem;
+        font-size: 1.2rem;
+        font-weight: 700;
+        background: transparent;
+        border: none;
+        border-bottom: 3px solid transparent;
+        color: #6b7280;
         transition: all 0.3s ease;
+        position: relative;
     }
     .stTabs [data-baseweb="tab"]:hover {
-        background: rgba(102, 126, 234, 0.1);
-        transform: translateY(-2px);
+        background: rgba(102, 126, 234, 0.05);
+        color: #667eea;
+        border-bottom-color: rgba(102, 126, 234, 0.3);
+    }
+    .stTabs [aria-selected="true"] {
+        background: transparent !important;
+        color: #667eea !important;
+        border-bottom: 3px solid #667eea !important;
+        font-weight: 800;
+    }
+    .stTabs [aria-selected="true"]::after {
+        content: "";
+        position: absolute;
+        bottom: -3px;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        animation: slideInRight 0.4s ease-out;
     }
     
     /* Button hover effects */
@@ -625,17 +661,28 @@ with st.sidebar:
     # Prikaži opštinu - Modern card
     if st.session_state.user_city:
         st.markdown(f"""
-        <div style="background: rgba(59, 130, 246, 0.1); 
-                    backdrop-filter: blur(10px);
-                    border: 1px solid rgba(59, 130, 246, 0.3);
+        <style>
+            @keyframes pulse-glow {{
+                0%, 100% {{ box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }}
+                50% {{ box-shadow: 0 0 35px rgba(59, 130, 246, 0.5); }}
+            }}
+            .city-card {{
+                background: linear-gradient(-45deg, rgba(30, 58, 138, 0.6), rgba(59, 130, 246, 0.6), rgba(102, 126, 234, 0.6));
+                background-size: 400% 400%;
+                animation: gradientShift 12s ease infinite, pulse-glow 3s ease-in-out infinite;
+                backdrop-filter: blur(10px);
+            }}
+        </style>
+        <div class="city-card" style="border: 1px solid rgba(59, 130, 246, 0.4);
                     padding: 1.2rem; 
                     border-radius: 15px;
                     position: relative;
                     overflow: hidden;">
             <div style="position: absolute; top: -20px; right: -20px; width: 80px; height: 80px;
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        border-radius: 50%; opacity: 0.1;"></div>
-            <p style="margin: 0; color: #60a5fa; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px;">📍 Vaša opština</p>
+                        background: radial-gradient(circle, rgba(255,255,255,0.15) 0%, transparent 70%);
+                        border-radius: 50%;
+                        animation: float 5s ease-in-out infinite;"></div>
+            <p style="margin: 0; color: #93c5fd; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px;">📍 Vaša opština</p>
             <p style="margin: 0.5rem 0 0 0; color: #fff; font-size: 1.2rem; font-weight: 700;">
                 {st.session_state.user_city}
             </p>
