@@ -1269,41 +1269,45 @@ else:
                     )
                     
                     progress_placeholder.empty()
-                    status_placeholder.empty()                    # Prikaži HPC rezultate
+                    status_placeholder.empty()
+                    
+                    # Prikaži HPC rezultate
                     col_hpc1, col_hpc2, col_hpc3 = st.columns(3)
                     with col_hpc1:
                         st.metric("⏰ Optimalno vrijeme", 
-                                 hpc_result['recommended_time'].strftime('%H:%M'))
+                                 hpc_result.get('recommended_time', datetime.now()).strftime('%H:%M'))
                     with col_hpc2:
                         st.metric("⌛ Prosječno čekanje", 
-                                 f"{hpc_result['estimated_wait_avg']} min")
+                                 f"{hpc_result.get('estimated_wait_avg', 0)} min")
                     with col_hpc3:
                         st.metric("👥 Očekivan red", 
-                                 f"{hpc_result['queue_size_avg']} ljudi")
+                                 f"{hpc_result.get('queue_size_avg', 0)} ljudi")
                     
                     # Success message with animation
-                    st.markdown(f"""
-                    <div style='padding: 1.5rem; background: linear-gradient(135deg, #10b98115, #34d39915); 
-                                border-radius: 12px; border-left: 4px solid #10b981; animation: fadeIn 0.5s; margin: 1rem 0;'>
-                        <h3 style='color: #10b981; margin: 0;'>✅ Optimalno vrijeme pronađeno!</h3>
-                        <p style='font-size: 1.3rem; font-weight: bold; margin: 0.5rem 0 0 0;'>
-                            📅 {hpc_result['recommended_time'].strftime('%d.%m.%Y u %H:%M')}
-                        </p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    if 'recommended_time' in hpc_result:
+                        st.markdown(f"""
+                        <div style='padding: 1.5rem; background: linear-gradient(135deg, #10b98115, #34d39915); 
+                                    border-radius: 12px; border-left: 4px solid #10b981; animation: fadeIn 0.5s; margin: 1rem 0;'>
+                            <h3 style='color: #10b981; margin: 0;'>✅ Optimalno vrijeme pronađeno!</h3>
+                            <p style='font-size: 1.3rem; font-weight: bold; margin: 0.5rem 0 0 0;'>
+                                📅 {hpc_result['recommended_time'].strftime('%d.%m.%Y u %H:%M')}
+                            </p>
+                        </div>
+                        """, unsafe_allow_html=True)
                     
                     # Detaljna statistika
-                    with st.expander("📊 Detaljna HPC statistika", expanded=False):
-                        st.markdown(f"""
-                        - **Raspon čekanja:** {hpc_result['estimated_wait_range'][0]}-{hpc_result['estimated_wait_range'][1]} minuta
-                        - **50% ljudi čeka max:** {hpc_result['percentile_50']} min
-                        - **95% ljudi čeka max:** {hpc_result['percentile_95']} min
-                        - **Pouzdanost:** {hpc_result['confidence']}% confidence interval
+                    if 'estimated_wait_range' in hpc_result:
+                        with st.expander("📊 Detaljna HPC statistika", expanded=False):
+                            st.markdown(f"""
+                            - **Raspon čekanja:** {hpc_result.get('estimated_wait_range', (0, 0))[0]}-{hpc_result.get('estimated_wait_range', (0, 0))[1]} minuta
+                        - **50% ljudi čeka max:** {hpc_result.get('percentile_50', 0)} min
+                        - **95% ljudi čeka max:** {hpc_result.get('percentile_95', 0)} min
+                        - **Pouzdanost:** {hpc_result.get('confidence', 0)}% confidence interval
                         - **Broj simulacija:** 5,000 Monte Carlo scenarija
                         - **Metoda:** Parallel processing na {os.cpu_count()} CPU cores
                         """)
                     
-                    st.caption("🎯 HPC preporuka zasnovana na 5,000 paralelnih simulacija")
+                        st.caption("🎯 HPC preporuka zasnovana na 5,000 paralelnih simulacija")
                 else:
                     # Basic predviđanje (stara metoda)
                     st.success(f"**{slot.strftime('%d.%m.%Y u %H:%M')}**")
