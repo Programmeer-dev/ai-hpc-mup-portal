@@ -86,84 +86,9 @@ st.set_page_config(
 # Custom CSS za visual polish
 st.markdown("""
 <style>
-    /* Animated Background with Particles */
-    @keyframes float {
-        0%, 100% { 
-            transform: translateY(0px) translateX(0px);
-            opacity: 0.8;
-        }
-        25% { 
-            transform: translateY(-30px) translateX(30px);
-            opacity: 1;
-        }
-        50% { 
-            transform: translateY(-50px) translateX(-20px);
-            opacity: 0.6;
-        }
-        75% { 
-            transform: translateY(-20px) translateX(40px);
-            opacity: 1;
-        }
-    }
-    
-    @keyframes gradientMove {
-        0% { background-position: 0% 50%; }
-        50% { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
-    }
-    
-    /* Main background gradient */
-    .stApp {
-        background: linear-gradient(-45deg, #e3f2fd, #f3e5f5, #fff9c4, #e1f5fe);
-        background-size: 400% 400%;
-        animation: gradientMove 15s ease infinite;
-        position: relative;
-    }
-    
-    /* Floating particles container */
-    .stApp::before {
-        content: "";
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
-        z-index: -1;
-        background-image: 
-            radial-gradient(circle, #667eea 2px, transparent 2px),
-            radial-gradient(circle, #764ba2 1px, transparent 1px),
-            radial-gradient(circle, #f093fb 1.5px, transparent 1.5px),
-            radial-gradient(circle, #4facfe 2px, transparent 2px),
-            radial-gradient(circle, #667eea 1px, transparent 1px);
-        background-size: 550px 550px, 350px 350px, 450px 450px, 600px 600px, 400px 400px;
-        background-position: 0 0, 40px 60px, 130px 270px, 70px 100px, 200px 150px;
-        animation: float 25s ease-in-out infinite;
-        opacity: 0.3;
-    }
-    
     /* Smooth transitions za sve elemente */
     * {
         transition: all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1) !important;
-    }
-    
-    /* Content wrapper - vidljiv iznad pozadine */
-    .main .block-container {
-        position: relative;
-        z-index: 1;
-    }
-    
-    /* Sidebar vidljiv */
-    [data-testid="stSidebar"] {
-        position: relative;
-        z-index: 2;
-    }
-    
-    /* Svi glavni elementi vidljivi */
-    .stApp > header,
-    .stApp > div {
-        position: relative;
-        z-index: 1;
     }
     
     /* Login page styling sa animated background */
