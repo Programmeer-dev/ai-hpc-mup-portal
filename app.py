@@ -129,7 +129,7 @@ st.markdown("""
         width: 100%;
         height: 100%;
         pointer-events: none;
-        z-index: 0;
+        z-index: -1;
         background-image: 
             radial-gradient(circle, #667eea 2px, transparent 2px),
             radial-gradient(circle, #764ba2 1px, transparent 1px),
@@ -149,6 +149,19 @@ st.markdown("""
     
     /* Content wrapper - vidljiv iznad pozadine */
     .main .block-container {
+        position: relative;
+        z-index: 1;
+    }
+    
+    /* Sidebar vidljiv */
+    [data-testid="stSidebar"] {
+        position: relative;
+        z-index: 2;
+    }
+    
+    /* Svi glavni elementi vidljivi */
+    .stApp > header,
+    .stApp > div {
         position: relative;
         z-index: 1;
     }
