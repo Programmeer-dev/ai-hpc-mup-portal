@@ -1,0 +1,197 @@
+"""
+DMS (Document Management System) modeli za upravljanje zahtjevima
+Podržava MUP i turističke zahtjeve sa workflow status tracking
+"""
+
+from datetime import datetime
+from enum import Enum as PyEnum
+import os
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Enum, Float, JSON, Boolean, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, sessionmaker
+
+# Kreiraj SQLAlchemy engine
+os.makedirs('instance', exist_ok=True)
+engine = create_engine('sqlite:///instance/dms.db', echo=False)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+Base = declarative_base()
+
+
+class RequestType(PyEnum):
+    """Tipovi zahtjeva u sistemu"""
+    # MUP zahtjevi
+    LICNA_KARTA = "licna_karta"
+    PASOS = "pasos"
+    VOZACKA_DOZVOLA = "vozacka_dozvola"
+    KRIVICNI_LIST = "krivicni_list"
+    VIZA = "viza"
+    
+    # Turističke registracije
+    TURIZAM_REGISTRACIJA = "turizam_registracija"
+    TURIZAM_LICENCA = "turizam_licenca"
+    TURIZAM_DOZVOLA_GRADNJE = "turizam_dozvola_gradnje"
+
+
+class RequestStatus(PyEnum):
+    """Status zahtjeva kroz workflow"""
+    DRAFT = "draft"  # Korisnik samo počeo
+    SUBMITTED = "submitted"  # Podnesen zahtjev
+    UNDER_REVIEW = "under_review"  # U obradi
+    PENDING_USER = "pending_user"  # Čeka korisnika
+    APPROVED = "approved"  # Odobren
+    REJECTED = "rejected"  # Odbijen
+    COMPLETED = "completed"  # Završen
+
+
+class RequestPriority(PyEnum):
+    """Prioritet zahtjeva"""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
+class DmsRequest(Base):
+    """Centralni model za sve zahtjeve"""
+    __tablename__ = 'dms_requests'
+    
+    id = Column(Integer, primary_key=True)
+    request_type = Column(Enum(RequestType), nullable=False, index=True)
+    
+    # Korisnik podaci
+    user_id = Column(String, nullable=False)
+    user_email = Column(String, nullable=False)
+    user_city = Column(String, nullable=False)
+    
+    # Status
+    status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False, index=True)
+    priority = Column(Enum(RequestPriority), default=RequestPriority.MEDIUM)
+    
+    # Vremenski žigovi
+    created_at = Column(DateTime, default=datetime.now)
+    submitted_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    completed_at = Column(DateTime, nullable=True)
+    
+    # Rok završetka (procjenjeni)
+    estimated_completion = Column(DateTime, nullable=True)
+    
+    # Detalji zahtjeva
+    description = Column(Text, nullable=True)
+    reason = Column(Text, nullable=True)  # Zašto traži (npr. izgubljena karta, nomadski rad)
+    
+    # JSON sa specifičnim poljima po tipu zahtjeva
+    details = Column(JSON, nullable=True)
+    
+    # Dokumenta metadata
+    documents_metadata = Column(JSON, nullable=True)  # Lista dokumenata sa statusom
+    required_documents = Column(JSON, nullable=True)  # Template šta je potrebno
+    
+    # Dodijeljena osoba (MUP radnik/turizam inspektoa)
+    assigned_to = Column(String, nullable=True)
+    
+    # Napomene
+    notes = Column(Text, nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+    
+    # Connections
+    status_history = relationship("RequestStatusHistory", back_populates="request", cascade="all, delete-orphan")
+    comments = relationship("RequestComment", back_populates="request", cascade="all, delete-orphan")
+    
+    def __repr__(self):
+        return f"<DmsRequest {self.id}: {self.request_type.value} - {self.status.value}>"
+
+
+class RequestStatusHistory(Base):
+    """Istorija promjena statusa zahtjeva"""
+    __tablename__ = 'request_status_history'
+    
+    id = Column(Integer, primary_key=True)
+    request_id = Column(Integer, ForeignKey('dms_requests.id'), nullable=False)
+    
+    from_status = Column(Enum(RequestStatus), nullable=False)
+    to_status = Column(Enum(RequestStatus), nullable=False)
+    
+    changed_by = Column(String, nullable=True)  # Ko je promijenio
+    changed_at = Column(DateTime, default=datetime.now)
+    reason = Column(Text, nullable=True)
+    
+    request = relationship("DmsRequest", back_populates="status_history")
+    
+    def __repr__(self):
+        return f"<StatusChange {self.from_status.value} → {self.to_status.value}>"
+
+
+class RequestComment(Base):
+    """Komentari na zahtjevu"""
+    __tablename__ = 'request_comments'
+    
+    id = Column(Integer, primary_key=True)
+    request_id = Column(Integer, ForeignKey('dms_requests.id'), nullable=False)
+    
+    author = Column(String, nullable=False)  # Ko je istavio komentar
+    author_type = Column(String, nullable=False)  # "user" ili "admin"
+    
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+    
+    is_internal = Column(Boolean, default=False)  # Korisnik ne vidi
+    
+    request = relationship("DmsRequest", back_populates="comments")
+
+
+class DocumentTemplate(Base):
+    """Template za potrebne dokumente po tipu zahtjeva"""
+    __tablename__ = 'document_templates'
+    
+    id = Column(Integer, primary_key=True)
+    request_type = Column(String, unique=True, nullable=False)
+    
+    required_documents = Column(JSON, nullable=False)  # Lista dokumenata
+    optional_documents = Column(JSON, nullable=True)   # Opciono
+    
+    # Vremenska procjena
+    estimated_days = Column(Integer, nullable=False)  # Koliko dana traje procedura
+    processing_fee_eur = Column(Float, nullable=True)
+    
+    instructions = Column(Text, nullable=True)  # Upute za korisnika
+    ai_keywords = Column(JSON, nullable=True)  # Za AI bot prepoznavanje
+    
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, onupdate=datetime.now)
+
+
+class TourismProperty(Base):
+    """Kuća/Stan registrovan za turizam"""
+    __tablename__ = 'tourism_properties'
+    
+    id = Column(Integer, primary_key=True)
+    property_type = Column(String, nullable=False)  # "house", "apartment", "villa"
+    
+    owner_id = Column(String, nullable=False)
+    address = Column(String, nullable=False)
+    city = Column(String, nullable=False)
+    coordinates = Column(JSON, nullable=True)  # {"lat": x, "lon": y}
+    
+    # Detalji
+    capacity = Column(Integer, nullable=False)  # Broj osoba
+    rooms = Column(Integer, nullable=False)
+    amenities = Column(JSON, nullable=True)  # ["wifi", "parking", "kitchen"]
+    
+    # Status registracije
+    license_number = Column(String, nullable=True)
+    license_valid_from = Column(DateTime, nullable=True)
+    license_valid_to = Column(DateTime, nullable=True)
+    
+    # Kategorija/zvjezdice
+    category = Column(String, nullable=True)  # "3*", "4*", itd
+    
+    # Povezani zahtjev
+    registration_request_id = Column(Integer, ForeignKey('dms_requests.id'), nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, onupdate=datetime.now)
+    
+    def __repr__(self):
+        return f"<Property {self.address} - Capacity: {self.capacity} osoba>"

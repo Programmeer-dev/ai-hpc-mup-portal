@@ -21,6 +21,12 @@ env/
 # Database
 data/session.json
 data/mup_data.db
+instance/dms.db
+
+# Uploaded files and generated artifacts
+documents/*
+!documents/.gitkeep
+*.log
 
 # Environment variables
 .env

@@ -26,7 +26,9 @@ def init_db():
         password_hash TEXT NOT NULL,
         email TEXT,
         city TEXT,
-        id_card_number TEXT
+        id_card_number TEXT,
+        role TEXT DEFAULT 'citizen',
+        is_admin INTEGER DEFAULT 0
     );
     """)
     
@@ -43,6 +45,20 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass  # kolona već postoji
+
+    # Dodaj kolonu role ako ne postoji
+    try:
+        cur.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'citizen'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    # Dodaj kolonu is_admin ako ne postoji
+    try:
+        cur.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
     # Tabela za servise (npr. licna karta)
     cur.execute("""
@@ -80,13 +96,15 @@ def init_db():
     conn.commit()
     conn.close()
 
-def create_user(username, password, email):
+def create_user(username, password, email, role="citizen", is_admin=False):
     conn = get_conn()
     cur = conn.cursor()
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
     try:
-        cur.execute("INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)",
-                    (username, hashed, email))
+        cur.execute(
+            "INSERT INTO users (username, password_hash, email, role, is_admin) VALUES (?, ?, ?, ?, ?)",
+            (username, hashed, email, role, 1 if is_admin else 0),
+        )
         conn.commit()
     except sqlite3.IntegrityError:
         return False  # korisnik već postoji
@@ -120,6 +138,30 @@ def get_user_city(username):
     row = cur.fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def get_user_role(username):
+    """Vraća rolu korisnika."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT role FROM users WHERE username = ?", (username,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else "citizen"
+
+
+def is_user_admin(username):
+    """Provjerava da li korisnik ima admin privilegije."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT is_admin, role FROM users WHERE username = ?", (username,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return False
+    is_admin_flag = bool(row[0]) if row[0] is not None else False
+    role = (row[1] or "").lower()
+    return is_admin_flag or role in ["admin", "officer"]
 
 def set_user_city(username, city):
     """Postavlja grad korisnika"""

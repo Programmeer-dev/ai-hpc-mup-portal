@@ -1,10 +1,4 @@
-
 streamlit==1.38.0
-folium
-streamlit-folium
-openai
+sqlalchemy>=2.0.0
 bcrypt
-python-docx
-streamlit-searchbox
-plotly
 python-dotenv

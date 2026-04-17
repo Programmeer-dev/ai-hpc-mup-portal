@@ -1,0 +1,278 @@
+{
+  "turizam_registracija": {
+    "naziv": "Registracija Turističke Nekretnine",
+    "opis": "Registracija kuće, stana ili vile za javnu rentu (AirBnB stil)",
+    "tip_nekretnine": ["kuća", "apartman", "vila", "prenoćište"],
+    "dokumenta_obavezna": [
+      {
+        "naziv": "Dokaz o vlasništvu",
+        "opis": "Л/C, kupoprodajna, testamenat ili drugi dokaz",
+        "format": ["pdf", "jpg", "png"],
+        "napomena": "Mora biti validan i čitljiv"
+      },
+      {
+        "naziv": "Lična karta/Pasoš",
+        "opis": "Dokument vlasnika nekretnine",
+        "format": ["pdf", "jpg"],
+        "napomena": "Obavezno obe strane"
+      },
+      {
+        "naziv": "Dokaz o stanu",
+        "opis": "Ugovor o najmu, vlasničkog lista ili potvrda od opštine",
+        "format": ["pdf", "jpg", "png"],
+        "napomena": "Prema lokalnim zakonima"
+      },
+      {
+        "naziv": "Koordinate/Mapa",
+        "opis": "GPS koordinate ili mapski prikaz lokacije",
+        "format": ["pdf", "screenshot"],
+        "napomena": "Lat/Lon format"
+      }
+    ],
+    "dokumenta_opciono": [
+      {
+        "naziv": "Dozvola od opštine",
+        "opis": "Ako je već odobrena od lokalne samouprave",
+        "format": ["pdf"]
+      },
+      {
+        "naziv": "Fotografije",
+        "opis": "Slike nekretnine (max 10)",
+        "format": ["jpg", "png"]
+      },
+      {
+        "naziv": "Osiguranje",
+        "opis": "Aktualna polisa osiguranja imovine",
+        "format": ["pdf"]
+      }
+    ],
+    "polja_zahtjeva": {
+      "tip_nekretnine": {
+        "tip": "select",
+        "obavezno": true,
+        "vrijednosti": ["kuća", "apartman", "vila", "prenoćište", "soban"]
+      },
+      "naziv": {
+        "tip": "text",
+        "obavezno": true,
+        "primjer": "Ljetna vila sa pogledom na more"
+      },
+      "opis": {
+        "tip": "textarea",
+        "obavezno": false,
+        "max_znakova": 1000
+      },
+      "cijena_po_noci": {
+        "tip": "number",
+        "obavezno": true,
+        "min": 10,
+        "max": 10000,
+        "valuta": "EUR"
+      },
+      "broj_osoba": {
+        "tip": "number",
+        "obavezno": true,
+        "min": 1,
+        "max": 50
+      },
+      "broj_soba": {
+        "tip": "number",
+        "obavezno": true,
+        "min": 1
+      },
+      "broj_kupaonicа": {
+        "tip": "number",
+        "obavezno": true,
+        "min": 1
+      },
+      "spavace_jedinice": {
+        "tip": "text",
+        "obavezno": true,
+        "primjer": "2 bračna kreveta, 3 jednospavaće",
+        "opis": "Detaljno nabrojaj sve spavaće jedinice"
+      },
+      "dostupnost_wifi": {
+        "tip": "boolean",
+        "obavezno": false,
+        "default": true
+      },
+      "dostupnost_parking": {
+        "tip": "boolean",
+        "obavezno": false,
+        "default": true
+      },
+      "dostupnost_klima": {
+        "tip": "boolean",
+        "obavezno": false,
+        "default": true
+      },
+      "dostupnost_grijanja": {
+        "tip": "boolean",
+        "obavezno": false,
+        "default": true
+      },
+      "dostupnost_kuhinje": {
+        "tip": "boolean",
+        "obavezno": false,
+        "default": true
+      },
+      "dostupnost_bazen": {
+        "tip": "boolean",
+        "obavezno": false,
+        "default": false
+      },
+      "dostupnost_balkon": {
+        "tip": "boolean",
+        "obavezno": false,
+        "default": false
+      },
+      "dostupnost_terasa": {
+        "tip": "boolean",
+        "obavezno": false,
+        "default": false
+      },
+      "adreza": {
+        "tip": "text",
+        "obavezno": true,
+        "primjer": "Ulica Pomoraca 123, Kotor"
+      },
+      "opstina": {
+        "tip": "select",
+        "obavezno": true,
+        "napomena": "Gdje se nalazi nekretnina"
+      },
+      "geografska_sirina": {
+        "tip": "number",
+        "obavezno": true,
+        "format": "decimal",
+        "primjer": 42.4267
+      },
+      "geografska_duzina": {
+        "tip": "number",
+        "obavezno": true,
+        "format": "decimal",
+        "primjer": 19.2679
+      },
+      "termin_check_in": {
+        "tip": "time",
+        "obavezno": true,
+        "default": "14:00"
+      },
+      "termin_check_out": {
+        "tip": "time",
+        "obavezno": true,
+        "default": "10:00"
+      },
+      "minimalna_nocu": {
+        "tip": "number",
+        "obavezno": false,
+        "min": 1,
+        "default": 1,
+        "napomena": "Minimalan broj nočenja"
+      },
+      "politika_otkaza": {
+        "tip": "select",
+        "obavezno": true,
+        "vrijednosti": ["fleksibilan", "umjeren", "strog"],
+        "opis": "Kako se rukuje otkazima"
+      },
+      "dodatne_usluge": {
+        "tip": "text",
+        "obavezno": false,
+        "primjer": "Transfer od aerodroma, pranje rublja, mesna hrana"
+      },
+      "tip_vlasnika": {
+        "tip": "select",
+        "obavezno": true,
+        "vrijednosti": ["fizičko lice", "pravno lice"],
+        "napomena": "Tip vlasnika registrovanog"
+      }
+    },
+    "procedura": [
+      "Korisnik popuni elektronsku formu sa detaljima nekretnine",
+      "Učita potrebne dokumente (dokaz vlasništva, ličnu kartu, fotke)",
+      "Sustav generiše inicijalni pregled - AI bot provjeri podatke",
+      "Zahtjev ide na odobrenje opštine/turizma",
+      "Inspektor/radnik provjeri lokaciju (ako je potrebno)",
+      "Otviranje se broja licence za turističko javno smještavanje",
+      "Korisnik dobija digitalni sertifikat i broj licence",
+      "Nekretnina se može početi oglašavati"
+    ],
+    "vremenski_rok": "15-45 dan",
+    "taksa": {
+      "vrijednost": 50,
+      "valuta": "EUR",
+      "napomena": "Zavisi od tipa nekretnine i broja osoba"
+    },
+    "institucije_uključene": [
+      "Opština/Grad (lokalna samouprava)",
+      "Ministarstvo turizma",
+      "MUP (za registraciju vlasnika)",
+      "Porezna uprava (za identifikacijski broj)"
+    ],
+    "ai_keywords": [
+      "turizam",
+      "registracija",
+      "apartman",
+      "izdavanje",
+      "kuća",
+      "vila",
+      "rentu",
+      "airbnb",
+      "smještaj",
+      "turistička nekretnina",
+      "licence",
+      "dozvola",
+      "javni smještaj"
+    ]
+  },
+  "turizam_licenca": {
+    "naziv": "Licenca za Javno Turističko Smještavanje",
+    "opis": "Licence za rad pansiona, hotela ili registrirane privatne nekretnine",
+    "dokumenta_obavezna": [
+      {
+        "naziv": "Prijava aktivnosti",
+        "opis": "Zahtjev za otvaranje turističke djelatnosti"
+      },
+      {
+        "naziv": "Dokaz registracije",
+        "opis": "Registracija od opštine ili ministarstva"
+      }
+    ],
+    "vremenski_rok": "14 dana",
+    "procedura": [
+      "Prikupljanje dokaza o registraciji",
+      "Provjera uslovao minimalnim standardima",
+      "Izdavanje licence"
+    ],
+    "ai_keywords": [
+      "licence",
+      "turizam",
+      "hotel",
+      "pansion",
+      "dozvola"
+    ]
+  },
+  "turizam_dozvola_gradnje": {
+    "naziv": "Dozvola za Adaptaciju/Rekonstrukciju",
+    "opis": "Ako trebate proširiti ili preurediti nekretninu za turizam",
+    "dokumenta_obavezna": [
+      {
+        "naziv": "Projekt",
+        "opis": "Arhitektonski/građevinski projekt"
+      },
+      {
+        "naziv": "Dozvola od opštine",
+        "opis": "Lokatura i dozvola za gradnju"
+      }
+    ],
+    "vremenski_rok": "30-60 dana",
+    "ai_keywords": [
+      "gradnja",
+      "dozvola",
+      "projekt",
+      "adaptacija",
+      "turizam"
+    ]
+  }
+}
