@@ -6,13 +6,17 @@ Podržava MUP i turističke zahtjeve sa workflow status tracking
 from datetime import datetime
 from enum import Enum as PyEnum
 import os
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Enum, Float, JSON, Boolean, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, sessionmaker
+from pathlib import Path
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Enum, Float, JSON, Boolean, ForeignKey, Index
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
-# Kreiraj SQLAlchemy engine
-os.makedirs('instance', exist_ok=True)
-engine = create_engine('sqlite:///instance/dms.db', echo=False)
+# Kreiraj SQLAlchemy engine sa stabilnom putanjom unutar projekta.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+INSTANCE_DIR = PROJECT_ROOT / "instance"
+INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
+DMS_DB_PATH = INSTANCE_DIR / "dms.db"
+
+engine = create_engine(f"sqlite:///{DMS_DB_PATH.as_posix()}", echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
@@ -55,6 +59,11 @@ class RequestPriority(PyEnum):
 class DmsRequest(Base):
     """Centralni model za sve zahtjeve"""
     __tablename__ = 'dms_requests'
+    __table_args__ = (
+        Index("idx_dms_requests_user_id", "user_id"),
+        Index("idx_dms_requests_status", "status"),
+        Index("idx_dms_requests_created_at", "created_at"),
+    )
     
     id = Column(Integer, primary_key=True)
     request_type = Column(Enum(RequestType), nullable=False, index=True)

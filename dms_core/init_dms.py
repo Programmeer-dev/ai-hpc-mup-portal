@@ -38,7 +38,7 @@ def init_dms_templates(db: Session, mup_rules_path: str, turizam_path: str):
     # Briši stare šablone
     db.query(DocumentTemplate).delete()
     
-    print("📋 Inicijalizujem DMS šablone...")
+    print("[INFO] Inicijalizujem DMS sablone...")
     
     # ========== MUP ZAHTJEVI ==========
     for service_key, service_data in mup_rules.items():
@@ -54,7 +54,7 @@ def init_dms_templates(db: Session, mup_rules_path: str, turizam_path: str):
         )
         
         db.add(template)
-        print(f"  ✓ MUP: {service_key}")
+        print(f"  [OK] MUP: {service_key}")
     
     # ========== TURISTIČKE REGISTRACIJE ==========
     for turizam_type, turizam_data in turizam.items():
@@ -96,16 +96,16 @@ def init_dms_templates(db: Session, mup_rules_path: str, turizam_path: str):
         )
         
         db.add(template)
-        print(f"  ✓ Turizam: {turizam_data.get('naziv', turizam_type)}")
+        print(f"  [OK] Turizam: {turizam_data.get('naziv', turizam_type)}")
     
     db.commit()
-    print(f"\n✅ DMS inicijalizacija završena! {db.query(DocumentTemplate).count()} šablona učitano.")
+    print(f"\n[OK] DMS inicijalizacija zavrsena! {db.query(DocumentTemplate).count()} sablona ucitano.")
 
 
 def init_dms_database(db_session: Session):
     """Kreira sve DMS tabele"""
     Base.metadata.create_all(engine)
-    print("✅ DMS baza podataka inicijalizirana")
+    print("[OK] DMS baza podataka inicijalizirana")
 
 
 if __name__ == "__main__":

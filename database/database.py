@@ -1,9 +1,12 @@
 # database.py
-import sqlite3, json
+import hashlib
+import json
+import sqlite3
 from pathlib import Path
 import bcrypt
 from datetime import datetime
 import os
+from typing import Optional
 
 # Get the directory where this file is located
 BASE_DIR = Path(__file__).parent.parent
@@ -93,19 +96,55 @@ def init_db():
     );
     """)
 
+    # Tabela za podnesene DMS zahtjeve (audit log u glavnoj bazi)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS request_submissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id INTEGER,
+        username TEXT NOT NULL,
+        request_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    """)
+
+    # Tabela za persistent sesije (remember me)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS user_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        revoked INTEGER DEFAULT 0
+    );
+    """)
+
+    # Indeksi za najčešće upite
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_queries_username ON queries(username)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_queries_created_at ON queries(created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_request_submissions_username ON request_submissions(username)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_request_submissions_created_at ON request_submissions(created_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_username ON user_sessions(username)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)")
+
     conn.commit()
     conn.close()
+
+
+def _hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 def create_user(username, password, email, role="citizen", is_admin=False):
     conn = get_conn()
     cur = conn.cursor()
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
     try:
-        cur.execute(
-            "INSERT INTO users (username, password_hash, email, role, is_admin) VALUES (?, ?, ?, ?, ?)",
-            (username, hashed, email, role, 1 if is_admin else 0),
-        )
-        conn.commit()
+        with conn:
+            cur.execute(
+                "INSERT INTO users (username, password_hash, email, role, is_admin) VALUES (?, ?, ?, ?, ?)",
+                (username, hashed, email, role, 1 if is_admin else 0),
+            )
     except sqlite3.IntegrityError:
         return False  # korisnik već postoji
     finally:
@@ -167,8 +206,8 @@ def set_user_city(username, city):
     """Postavlja grad korisnika"""
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("UPDATE users SET city = ? WHERE username = ?", (city, username))
-    conn.commit()
+    with conn:
+        cur.execute("UPDATE users SET city = ? WHERE username = ?", (city, username))
     conn.close()
     return True
 
@@ -176,15 +215,160 @@ def save_query(username, query, service):
     """Sačuvaj upit korisnika u bazu"""
     conn = get_conn()
     cur = conn.cursor()
-    from datetime import datetime
     created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cur.execute(
-        "INSERT INTO queries (username, query, service, created_at) VALUES (?, ?, ?, ?)",
-        (username, query, service, created_at)
-    )
-    conn.commit()
+    with conn:
+        cur.execute(
+            "INSERT INTO queries (username, query, service, created_at) VALUES (?, ?, ?, ?)",
+            (username, query, service, created_at)
+        )
     conn.close()
     return True
+
+
+def save_request_submission(username, request_id, request_type, status):
+    """Sačuvaj podneseni zahtjev korisnika u glavnu bazu (audit log)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS request_submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id INTEGER,
+            username TEXT NOT NULL,
+            request_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with conn:
+        cur.execute(
+            """
+            INSERT INTO request_submissions (request_id, username, request_type, status, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (request_id, username, request_type, status, created_at)
+        )
+    conn.close()
+    return True
+
+
+def create_user_session(username: str, token: str, expires_at: str) -> bool:
+    conn = get_conn()
+    cur = conn.cursor()
+    token_hash = _hash_session_token(token)
+    created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with conn:
+        cur.execute(
+            """
+            INSERT INTO user_sessions (username, token_hash, expires_at, created_at, revoked)
+            VALUES (?, ?, ?, ?, 0)
+            """,
+            (username, token_hash, expires_at, created_at),
+        )
+    conn.close()
+    return True
+
+
+def validate_user_session(username: str, token: str) -> bool:
+    conn = get_conn()
+    cur = conn.cursor()
+    token_hash = _hash_session_token(token)
+    cur.execute(
+        """
+        SELECT expires_at, revoked
+        FROM user_sessions
+        WHERE username = ? AND token_hash = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (username, token_hash),
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return False
+
+    expires_at, revoked = row
+    if revoked:
+        return False
+
+    try:
+        expires_dt = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return False
+
+    return datetime.now() <= expires_dt
+
+
+def revoke_user_session(username: str, token: str) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+    token_hash = _hash_session_token(token)
+    with conn:
+        cur.execute(
+            "UPDATE user_sessions SET revoked = 1 WHERE username = ? AND token_hash = ?",
+            (username, token_hash),
+        )
+    conn.close()
+
+
+def revoke_all_user_sessions(username: str, except_token: Optional[str] = None) -> None:
+    conn = get_conn()
+    cur = conn.cursor()
+    with conn:
+        if except_token:
+            token_hash = _hash_session_token(except_token)
+            cur.execute(
+                "UPDATE user_sessions SET revoked = 1 WHERE username = ? AND token_hash != ?",
+                (username, token_hash),
+            )
+        else:
+            cur.execute(
+                "UPDATE user_sessions SET revoked = 1 WHERE username = ?",
+                (username,),
+            )
+    conn.close()
+
+
+def cleanup_expired_sessions() -> int:
+    conn = get_conn()
+    cur = conn.cursor()
+    now_text = datetime.now().isoformat()
+    with conn:
+        cur.execute("DELETE FROM user_sessions WHERE expires_at < ?", (now_text,))
+        deleted = cur.rowcount
+    conn.close()
+    return int(deleted or 0)
+
+
+def get_user_request_submissions(username, limit=50):
+    """Vrati listu podnesenih zahtjeva korisnika iz audit log tabele."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT request_id, request_type, status, created_at
+        FROM request_submissions
+        WHERE username = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (username, limit)
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "request_id": request_id,
+            "request_type": request_type,
+            "status": status,
+            "created_at": created_at,
+        }
+        for request_id, request_type, status, created_at in rows
+    ]
 
 def get_user_queries(username, limit=10):
     """Preuzmi historiju upita korisnika"""

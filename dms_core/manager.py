@@ -3,6 +3,7 @@ Document Management System Manager
 Upravljanje zahtjevima kroz kompletan workflow
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dms_core.models import (
@@ -17,6 +18,10 @@ class DmsManager:
     
     def __init__(self, db_session):
         self.db = db_session
+        self.logger = logging.getLogger("dms_portal.dms_manager")
+
+    def _get_request(self, request_id: int) -> Optional[DmsRequest]:
+        return self.db.get(DmsRequest, request_id)
     
     # ============= KREIRANJE ZAHTJEVA =============
     
@@ -65,7 +70,7 @@ class DmsManager:
     
     def submit_request(self, request_id: int, changed_by: str = None) -> bool:
         """Podnesi zahtjev (DRAFT → SUBMITTED)"""
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         if not request:
             return False
 
@@ -79,7 +84,7 @@ class DmsManager:
     
     def start_review(self, request_id: int, assigned_to: str) -> bool:
         """Počni pregled (SUBMITTED → UNDER_REVIEW)"""
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         if not request:
             return False
         
@@ -94,7 +99,7 @@ class DmsManager:
     
     def request_user_action(self, request_id: int, action_needed: str, changed_by: str) -> bool:
         """Zahtijevaj od korisnika akciju (→ PENDING_USER)"""
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         if not request:
             return False
         
@@ -116,7 +121,7 @@ class DmsManager:
     
     def approve_request(self, request_id: int, approved_by: str, notes: str = None) -> bool:
         """Odobri zahtjev"""
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         if not request:
             return False
         
@@ -133,7 +138,7 @@ class DmsManager:
     
     def complete_request(self, request_id: int, completed_by: str) -> bool:
         """Označi zahtjev kao završen"""
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         if not request:
             return False
         
@@ -148,7 +153,7 @@ class DmsManager:
     
     def reject_request(self, request_id: int, rejection_reason: str, rejected_by: str) -> bool:
         """Odbij zahtjev"""
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         if not request:
             return False
         
@@ -179,9 +184,12 @@ class DmsManager:
         reason: str = None
     ) -> bool:
         """Promijeni status i spremi u istoriju"""
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         if not request:
             return False
+
+        if not changed_by:
+            raise ValueError("Promjena statusa zahtijeva korisnicki identitet.")
         
         old_status = request.status
         if old_status == new_status:
@@ -204,6 +212,13 @@ class DmsManager:
         
         self.db.add(history)
         self.db.commit()
+        self.logger.info(
+            "Status change request_id=%s from=%s to=%s by=%s",
+            request_id,
+            old_status.value,
+            new_status.value,
+            changed_by,
+        )
         
         return True
 
@@ -224,7 +239,7 @@ class DmsManager:
         return new_status in allowed.get(old_status, set())
 
     def get_available_transitions(self, request_id: int) -> List[RequestStatus]:
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         if not request:
             return []
         candidates = [status for status in RequestStatus if status != request.status]
@@ -235,9 +250,25 @@ class DmsManager:
         request_id: int,
         new_status: RequestStatus,
         changed_by: str,
+        actor_role: str = "admin",
         reason: str = None,
     ) -> bool:
         """Javni API za promjenu statusa kroz validirani workflow."""
+        request = self._get_request(request_id)
+        if not request:
+            return False
+
+        role = (actor_role or "").strip().lower()
+        if role != "admin":
+            # Korisniku je dozvoljen samo povratak iz PENDING_USER u SUBMITTED.
+            allowed_user_transition = (
+                request.user_id == changed_by
+                and request.status == RequestStatus.PENDING_USER
+                and new_status == RequestStatus.SUBMITTED
+            )
+            if not allowed_user_transition:
+                raise PermissionError("Nemate dozvolu za ovu promjenu statusa.")
+
         return self._change_status(
             request_id=request_id,
             new_status=new_status,
@@ -249,7 +280,7 @@ class DmsManager:
     
     def upload_document(self, request_id: int, doc_name: str, file_path: str) -> bool:
         """Učitaj dokument na zahtjev"""
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         if not request:
             return False
         
@@ -268,7 +299,7 @@ class DmsManager:
     
     def get_required_documents(self, request_id: int) -> List[str]:
         """Vrni listu potrebnih dokumenata"""
-        request = self.db.query(DmsRequest).get(request_id)
+        request = self._get_request(request_id)
         return request.required_documents if request else []
     
     # ============= KOMENTARI =============
@@ -402,6 +433,195 @@ class DmsManager:
             "by_status": statuses,
             "avg_completion_days": avg_completion_time,
             "overdue_count": len(self.get_overdue_requests())
+        }
+
+    def get_kpi_metrics(self) -> Dict:
+        """KPI metrike za dashboard i odbranu projekta."""
+        total = self.db.query(DmsRequest).count()
+        submitted = self.db.query(DmsRequest).filter(DmsRequest.submitted_at != None).count()
+        completed = self.db.query(DmsRequest).filter(DmsRequest.status == RequestStatus.COMPLETED).count()
+
+        pending_user_ids = {
+            req_id
+            for (req_id,) in self.db.query(RequestStatusHistory.request_id)
+            .filter(RequestStatusHistory.to_status == RequestStatus.PENDING_USER)
+            .distinct()
+            .all()
+        }
+
+        first_review_hours = []
+        submitted_requests = self.db.query(DmsRequest).filter(DmsRequest.submitted_at != None).all()
+        for req in submitted_requests:
+            first_review = (
+                self.db.query(RequestStatusHistory)
+                .filter(
+                    RequestStatusHistory.request_id == req.id,
+                    RequestStatusHistory.to_status == RequestStatus.UNDER_REVIEW,
+                )
+                .order_by(RequestStatusHistory.changed_at.asc())
+                .first()
+            )
+            if first_review and req.submitted_at and first_review.changed_at:
+                delta_hours = (first_review.changed_at - req.submitted_at).total_seconds() / 3600
+                first_review_hours.append(max(delta_hours, 0))
+
+        avg_first_review_hours = (
+            round(sum(first_review_hours) / len(first_review_hours), 2) if first_review_hours else 0
+        )
+
+        completion_rate = round((completed / submitted) * 100, 2) if submitted else 0
+        correction_rate = round((len(pending_user_ids) / submitted) * 100, 2) if submitted else 0
+
+        return {
+            "total_requests": total,
+            "submitted_requests": submitted,
+            "completed_requests": completed,
+            "overdue_requests": len(self.get_overdue_requests()),
+            "avg_first_review_hours": avg_first_review_hours,
+            "completion_rate_percent": completion_rate,
+            "correction_rate_percent": correction_rate,
+        }
+
+    def get_weekly_trends(self, weeks: int = 8) -> List[Dict]:
+        """Vraća nedeljne KPI trendove za broj kreiranih, podnesenih i završenih zahtjeva."""
+        weeks = max(2, min(weeks, 26))
+        now = datetime.now()
+        current_week_start = (now - timedelta(days=now.weekday())).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        first_week_start = current_week_start - timedelta(days=7 * (weeks - 1))
+
+        buckets = {}
+        for idx in range(weeks):
+            week_start = first_week_start + timedelta(days=7 * idx)
+            label = week_start.strftime("%Y-%m-%d")
+            buckets[label] = {
+                "week": label,
+                "created": 0,
+                "submitted": 0,
+                "completed": 0,
+            }
+
+        requests = self.db.query(DmsRequest).filter(DmsRequest.created_at >= first_week_start).all()
+
+        def add(metric_name: str, timestamp):
+            if not timestamp or timestamp < first_week_start:
+                return
+            week_start = (timestamp - timedelta(days=timestamp.weekday())).replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+            label = week_start.strftime("%Y-%m-%d")
+            if label in buckets:
+                buckets[label][metric_name] += 1
+
+        for req in requests:
+            add("created", req.created_at)
+            add("submitted", req.submitted_at)
+            add("completed", req.completed_at)
+
+        return [buckets[key] for key in sorted(buckets.keys())]
+
+    def apply_sla_escalation(self) -> Dict:
+        """Eskalira prioritet aktivnih predmeta koji kasne preko procijenjenog roka."""
+        now = datetime.now()
+        active_statuses = [
+            RequestStatus.SUBMITTED,
+            RequestStatus.UNDER_REVIEW,
+            RequestStatus.PENDING_USER,
+        ]
+        active = self.db.query(DmsRequest).filter(DmsRequest.status.in_(active_statuses)).all()
+
+        escalated = 0
+        checked = 0
+        for req in active:
+            if not req.estimated_completion or req.estimated_completion >= now:
+                continue
+
+            checked += 1
+            late_days = (now - req.estimated_completion).days
+            target_priority = RequestPriority.URGENT if late_days >= 7 else RequestPriority.HIGH
+
+            if req.priority != target_priority:
+                req.priority = target_priority
+                req.updated_at = now
+                escalated += 1
+
+        if escalated:
+            self.db.commit()
+
+        return {
+            "checked_overdue": checked,
+            "escalated": escalated,
+        }
+
+    def build_audit_pack(self, request_id: int) -> Dict:
+        """Generiše audit izvještaj za pojedinačni predmet."""
+        request = self._get_request(request_id)
+        if not request:
+            raise ValueError("Zahtjev nije pronađen.")
+
+        history_rows = (
+            self.db.query(RequestStatusHistory)
+            .filter(RequestStatusHistory.request_id == request_id)
+            .order_by(RequestStatusHistory.changed_at.asc())
+            .all()
+        )
+        comment_rows = (
+            self.db.query(RequestComment)
+            .filter(RequestComment.request_id == request_id)
+            .order_by(RequestComment.created_at.asc())
+            .all()
+        )
+
+        return {
+            "generated_at": datetime.now().isoformat(),
+            "request": {
+                "id": request.id,
+                "request_type": request.request_type.value if request.request_type else None,
+                "status": request.status.value if request.status else None,
+                "priority": request.priority.value if request.priority else None,
+                "user_id": request.user_id,
+                "user_email": request.user_email,
+                "user_city": request.user_city,
+                "description": request.description,
+                "reason": request.reason,
+                "details": request.details or {},
+                "documents_metadata": request.documents_metadata or [],
+                "required_documents": request.required_documents or [],
+                "created_at": request.created_at.isoformat() if request.created_at else None,
+                "submitted_at": request.submitted_at.isoformat() if request.submitted_at else None,
+                "updated_at": request.updated_at.isoformat() if request.updated_at else None,
+                "completed_at": request.completed_at.isoformat() if request.completed_at else None,
+                "assigned_to": request.assigned_to,
+                "notes": request.notes,
+                "rejection_reason": request.rejection_reason,
+            },
+            "status_history": [
+                {
+                    "from_status": row.from_status.value if row.from_status else None,
+                    "to_status": row.to_status.value if row.to_status else None,
+                    "changed_by": row.changed_by,
+                    "changed_at": row.changed_at.isoformat() if row.changed_at else None,
+                    "reason": row.reason,
+                }
+                for row in history_rows
+            ],
+            "comments": [
+                {
+                    "author": row.author,
+                    "author_type": row.author_type,
+                    "is_internal": row.is_internal,
+                    "content": row.content,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in comment_rows
+            ],
         }
     
     def _calculate_avg_completion_time(self) -> float:

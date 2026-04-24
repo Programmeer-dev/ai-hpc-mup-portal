@@ -2,3 +2,8 @@ streamlit==1.38.0
 sqlalchemy>=2.0.0
 bcrypt
 python-dotenv
+openai
+plotly
+pandas
+python-docx
+pytest

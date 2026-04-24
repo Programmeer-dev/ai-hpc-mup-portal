@@ -25,6 +25,15 @@ python dms_core/init_dms.py
 streamlit run app.py
 ```
 
+## ✅ Brza Validacija Nakon Pokretanja
+
+```bash
+run_smoke_test.bat
+python -m pytest -q
+```
+
+Ako oba koraka prođu bez greške, osnovni i regresioni tokovi su stabilni.
+
 **Trebalo bi vidjeti:**
 ```
 ✅ DMS baza podataka inicijalizirana

@@ -90,6 +90,8 @@ streamlit run app.py
 4. Open browser:
 - http://localhost:8501
 
+This repository now runs as a Streamlit MVP only.
+
 ## Data and Bootstrapping
 
 On startup the app automatically:

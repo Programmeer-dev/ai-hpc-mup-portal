@@ -20,6 +20,13 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+4. Run automated checks:
+
+```bash
+run_smoke_test.bat
+python -m pytest -q
+```
+
 ## 2. Demo Accounts
 
 Create accounts through UI registration before defense, for example:
@@ -100,3 +107,12 @@ Recommended path for one request:
 - No external payment gateway integration.
 - Officer role is username-based from APP_ADMIN_USERS.
 - Legacy helper modules remain in repo but are out of main UX flow.
+
+## 9. Automated Validation Suite
+
+- `run_smoke_test.bat`
+	- End-to-end smoke of auth + municipality validation + DMS submit flow + audit log.
+	- Cleans up generated smoke data automatically.
+
+- `python -m pytest -q`
+	- Regression checks for auth/session helpers and workflow authorization guards.
