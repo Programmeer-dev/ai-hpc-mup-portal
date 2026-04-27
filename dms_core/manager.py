@@ -389,6 +389,188 @@ class DmsManager:
         return self.db.query(DmsRequest).filter(
             DmsRequest.status.in_(active_statuses)
         ).order_by(DmsRequest.priority, DmsRequest.created_at).all()
+
+    def get_priority_inbox(self, pending_user_days: int = 3) -> List[Dict]:
+        """Vraća aktivne predmete sa prioritetnim oznakama za admin inbox."""
+        now = datetime.now()
+        inbox = []
+
+        for req in self.get_active_requests():
+            flags = []
+            score = 0
+
+            if req.estimated_completion and req.estimated_completion < now:
+                late_days = (now - req.estimated_completion).days
+                flags.append(f"Kasni {late_days} dana")
+                score += 3 + min(4, max(0, late_days))
+
+            if req.status == RequestStatus.PENDING_USER and req.updated_at:
+                wait_days = (now - req.updated_at).days
+                if wait_days >= pending_user_days:
+                    flags.append(f"Čeka korisnika {wait_days} dana")
+                    score += 3
+
+            if req.status == RequestStatus.SUBMITTED and not req.assigned_to:
+                flags.append("Bez dodijeljenog službenika")
+                score += 2
+
+            priority_weight = {
+                RequestPriority.URGENT: 3,
+                RequestPriority.HIGH: 2,
+                RequestPriority.MEDIUM: 1,
+                RequestPriority.LOW: 0,
+            }.get(req.priority, 0)
+            score += priority_weight
+
+            inbox.append(
+                {
+                    "request": req,
+                    "score": score,
+                    "flags": flags,
+                    "is_overdue": any("Kasni" in flag for flag in flags),
+                    "is_pending_user_long": any("Čeka korisnika" in flag for flag in flags),
+                    "is_unassigned": "Bez dodijeljenog službenika" in flags,
+                }
+            )
+
+        inbox.sort(key=lambda item: (item["score"], item["request"].created_at), reverse=True)
+        return inbox
+
+    def bulk_manage_requests(
+        self,
+        request_ids: List[int],
+        changed_by: str,
+        assign_to: Optional[str] = None,
+        new_priority: Optional[RequestPriority] = None,
+        new_status: Optional[RequestStatus] = None,
+        reason: Optional[str] = None,
+    ) -> Dict:
+        """Primijeni grupne izmjene nad više predmeta."""
+        if not changed_by:
+            raise ValueError("Bulk izmjene zahtijevaju korisnicki identitet.")
+
+        updated = 0
+        transitioned = 0
+        failed: List[Dict] = []
+        touched = False
+
+        for request_id in request_ids:
+            request = self._get_request(int(request_id))
+            if not request:
+                failed.append({"request_id": request_id, "error": "Zahtjev nije pronađen."})
+                continue
+
+            try:
+                if assign_to is not None:
+                    normalized_assignee = assign_to.strip() if assign_to else None
+                    if request.assigned_to != normalized_assignee:
+                        request.assigned_to = normalized_assignee
+                        touched = True
+
+                if new_priority and request.priority != new_priority:
+                    request.priority = new_priority
+                    request.updated_at = datetime.now()
+                    touched = True
+
+                if new_status and request.status != new_status:
+                    transition_reason = reason.strip() if reason else "Bulk status promjena"
+                    self.transition_request(
+                        request_id=request.id,
+                        new_status=new_status,
+                        changed_by=changed_by,
+                        actor_role="admin",
+                        reason=transition_reason,
+                    )
+                    transitioned += 1
+
+                    if new_status == RequestStatus.PENDING_USER and transition_reason:
+                        self.add_comment(
+                            request.id,
+                            author=changed_by,
+                            content=transition_reason,
+                            author_type="admin",
+                            is_internal=False,
+                        )
+                    if new_status == RequestStatus.REJECTED and transition_reason:
+                        request.rejection_reason = transition_reason
+                        touched = True
+
+                updated += 1
+            except Exception as exc:
+                failed.append({"request_id": request_id, "error": str(exc)})
+
+        if touched:
+            self.db.commit()
+
+        return {
+            "processed": len(request_ids),
+            "updated": updated,
+            "transitioned": transitioned,
+            "failed": failed,
+        }
+
+    def get_officer_workload(self, days: int = 30) -> List[Dict]:
+        """Vraća workload metrike po službeniku."""
+        since = datetime.now() - timedelta(days=max(1, days))
+        active_statuses = {
+            RequestStatus.SUBMITTED,
+            RequestStatus.UNDER_REVIEW,
+            RequestStatus.PENDING_USER,
+        }
+
+        requests = self.db.query(DmsRequest).filter(DmsRequest.assigned_to != None).all()
+        officers: Dict[str, Dict] = {}
+
+        for req in requests:
+            officer = (req.assigned_to or "").strip()
+            if not officer:
+                continue
+
+            bucket = officers.setdefault(
+                officer,
+                {
+                    "officer": officer,
+                    "active": 0,
+                    "overdue_active": 0,
+                    "completed_last_30_days": 0,
+                    "first_review_samples": 0,
+                    "avg_first_review_hours": 0.0,
+                },
+            )
+
+            if req.status in active_statuses:
+                bucket["active"] += 1
+                if req.estimated_completion and req.estimated_completion < datetime.now():
+                    bucket["overdue_active"] += 1
+
+            if req.status == RequestStatus.COMPLETED and req.completed_at and req.completed_at >= since:
+                bucket["completed_last_30_days"] += 1
+
+            first_review = (
+                self.db.query(RequestStatusHistory)
+                .filter(
+                    RequestStatusHistory.request_id == req.id,
+                    RequestStatusHistory.to_status == RequestStatus.UNDER_REVIEW,
+                    RequestStatusHistory.changed_by == officer,
+                )
+                .order_by(RequestStatusHistory.changed_at.asc())
+                .first()
+            )
+            if first_review and req.submitted_at and first_review.changed_at:
+                delta_hours = (first_review.changed_at - req.submitted_at).total_seconds() / 3600
+                if delta_hours >= 0:
+                    sample_count = bucket["first_review_samples"]
+                    avg = bucket["avg_first_review_hours"]
+                    bucket["avg_first_review_hours"] = round(
+                        ((avg * sample_count) + delta_hours) / (sample_count + 1),
+                        2,
+                    )
+                    bucket["first_review_samples"] += 1
+
+        result = sorted(officers.values(), key=lambda row: (row["active"], row["overdue_active"]), reverse=True)
+        for row in result:
+            row.pop("first_review_samples", None)
+        return result
     
     def get_overdue_requests(self) -> List[DmsRequest]:
         """Zahtjevi koji su prošli rok"""

@@ -117,3 +117,5 @@ On startup the app automatically:
 ## Notes
 
 This repository still contains legacy files from earlier iterations (analytics, chatbot variants, Word generator). They are intentionally outside the main MVP user flow.
+
+The Help/FAQ section now works as a hybrid AI chatbot: it uses OpenAI when `OPENAI_API_KEY` is configured, and otherwise falls back to the local DMS FAQ engine.

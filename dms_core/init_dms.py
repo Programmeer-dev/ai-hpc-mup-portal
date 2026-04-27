@@ -43,6 +43,8 @@ def init_dms_templates(db: Session, mup_rules_path: str, turizam_path: str):
     # ========== MUP ZAHTJEVI ==========
     for service_key, service_data in mup_rules.items():
         required_docs = service_data.get('dokumenta', [])
+        ai_keywords = [service_key.lower()] + service_key.lower().split()
+        ai_keywords.extend(service_data.get('alias', []))
         
         template = DocumentTemplate(
             request_type=_normalize_request_type(service_key),
@@ -50,7 +52,7 @@ def init_dms_templates(db: Session, mup_rules_path: str, turizam_path: str):
             estimated_days=service_data.get('rok_izrade_dana', 15),
             processing_fee_eur=service_data.get('taksa_eur', 0),
             instructions=f"Usluga: {service_key}\n\nUplata: {service_data.get('uplata', '')}",
-            ai_keywords=[service_key.lower()] + service_key.lower().split()
+            ai_keywords=ai_keywords
         )
         
         db.add(template)

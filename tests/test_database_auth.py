@@ -3,8 +3,14 @@ import uuid
 
 from database.database import (
     authenticate_user,
+    clear_login_failures,
     create_user,
     create_user_session,
+    get_login_block_status,
+    get_id_card_number,
+    get_user_city,
+    get_user_email,
+    record_login_failure,
     revoke_all_user_sessions,
     revoke_user_session,
     set_user_city,
@@ -68,3 +74,42 @@ def test_revoke_all_user_sessions():
     revoke_all_user_sessions(username, except_token=token_a)
     assert validate_user_session(username, token_a) is True
     assert validate_user_session(username, token_b) is False
+
+
+def test_signup_persists_profile_fields():
+    username = _user_name()
+    password = "Pytest123!"
+    email = f"{username}@example.com"
+    city = "Podgorica"
+    id_card_number = "A123456"
+
+    assert create_user(
+        username=username,
+        password=password,
+        email=email,
+        city=city,
+        id_card_number=id_card_number,
+    ) is True
+
+    assert get_user_email(username) == email
+    assert get_user_city(username) == city
+    assert get_id_card_number(username) == id_card_number
+
+
+def test_login_block_status_after_repeated_failures():
+    username = _user_name()
+    password = "Pytest123!"
+
+    assert create_user(username, password, f"{username}@example.com") is True
+
+    clear_login_failures(username)
+    for _ in range(5):
+        record_login_failure(username)
+
+    status = get_login_block_status(username, max_attempts=5, window_minutes=15)
+    assert status["blocked"] is True
+    assert status["attempts_left"] == 0
+
+    clear_login_failures(username)
+    unblocked = get_login_block_status(username, max_attempts=5, window_minutes=15)
+    assert unblocked["blocked"] is False

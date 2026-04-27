@@ -2,9 +2,10 @@
 import hashlib
 import json
 import sqlite3
+import re
 from pathlib import Path
 import bcrypt
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from typing import Optional
 
@@ -120,6 +121,17 @@ def init_db():
     );
     """)
 
+    # Evidencija neuspjelih prijava (anti brute-force)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+
     # Indeksi za najčešće upite
     cur.execute("CREATE INDEX IF NOT EXISTS idx_queries_username ON queries(username)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_queries_created_at ON queries(created_at)")
@@ -127,6 +139,7 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_request_submissions_created_at ON request_submissions(created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_username ON user_sessions(username)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_username_created_at ON login_attempts(username, created_at)")
 
     conn.commit()
     conn.close()
@@ -135,15 +148,59 @@ def init_db():
 def _hash_session_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-def create_user(username, password, email, role="citizen", is_admin=False):
+
+def _ensure_login_attempts_table(conn) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_login_attempts_username_created_at ON login_attempts(username, created_at)"
+    )
+    conn.commit()
+
+def create_user(
+    username,
+    password,
+    email,
+    role="citizen",
+    is_admin=False,
+    city=None,
+    id_card_number=None,
+):
+    username = (username or "").strip()
+    email = (email or "").strip().lower()
+    if not username or not password or not email:
+        return False
+
+    # Basic input validation to keep auth data clean.
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", username):
+        return False
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return False
+
+    if city is not None:
+        city = city.strip() or None
+    if id_card_number is not None:
+        id_card_number = id_card_number.strip() or None
+
     conn = get_conn()
     cur = conn.cursor()
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
     try:
         with conn:
             cur.execute(
-                "INSERT INTO users (username, password_hash, email, role, is_admin) VALUES (?, ?, ?, ?, ?)",
-                (username, hashed, email, role, 1 if is_admin else 0),
+                """
+                INSERT INTO users (username, password_hash, email, city, id_card_number, role, is_admin)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (username, hashed, email, city, id_card_number, role, 1 if is_admin else 0),
             )
     except sqlite3.IntegrityError:
         return False  # korisnik već postoji
@@ -160,6 +217,99 @@ def authenticate_user(username, password):
     if row:
         return bcrypt.checkpw(password.encode("utf-8"), row[0])
     return False
+
+
+def record_login_failure(username: str) -> None:
+    username = (username or "").strip()
+    if not username:
+        return
+
+    conn = get_conn()
+    _ensure_login_attempts_table(conn)
+    cur = conn.cursor()
+    with conn:
+        cur.execute(
+            "INSERT INTO login_attempts (username, created_at) VALUES (?, ?)",
+            (username, datetime.now().isoformat()),
+        )
+    conn.close()
+
+
+def clear_login_failures(username: str) -> None:
+    username = (username or "").strip()
+    if not username:
+        return
+
+    conn = get_conn()
+    _ensure_login_attempts_table(conn)
+    cur = conn.cursor()
+    with conn:
+        cur.execute("DELETE FROM login_attempts WHERE username = ?", (username,))
+    conn.close()
+
+
+def get_login_block_status(username: str, max_attempts: int = 5, window_minutes: int = 15) -> dict:
+    username = (username or "").strip()
+    if not username:
+        return {
+            "blocked": False,
+            "failed_attempts": 0,
+            "attempts_left": max_attempts,
+            "retry_after_seconds": 0,
+        }
+
+    now = datetime.now()
+    window_start = (now - timedelta(minutes=window_minutes)).isoformat()
+
+    conn = get_conn()
+    _ensure_login_attempts_table(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT created_at
+        FROM login_attempts
+        WHERE username = ? AND created_at >= ?
+        ORDER BY created_at ASC
+        """,
+        (username, window_start),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    timestamps = []
+    for row in rows:
+        try:
+            timestamps.append(datetime.fromisoformat(row[0]))
+        except (TypeError, ValueError):
+            continue
+
+    failed_attempts = len(timestamps)
+    attempts_left = max(0, max_attempts - failed_attempts)
+
+    if failed_attempts < max_attempts:
+        return {
+            "blocked": False,
+            "failed_attempts": failed_attempts,
+            "attempts_left": attempts_left,
+            "retry_after_seconds": 0,
+        }
+
+    threshold_time = timestamps[-max_attempts]
+    retry_after = int((threshold_time + timedelta(minutes=window_minutes) - now).total_seconds())
+    if retry_after > 0:
+        return {
+            "blocked": True,
+            "failed_attempts": failed_attempts,
+            "attempts_left": 0,
+            "retry_after_seconds": retry_after,
+        }
+
+    return {
+        "blocked": False,
+        "failed_attempts": failed_attempts,
+        "attempts_left": attempts_left,
+        "retry_after_seconds": 0,
+    }
 
 def get_user_email(username):
     conn = get_conn()
@@ -187,6 +337,23 @@ def get_user_role(username):
     row = cur.fetchone()
     conn.close()
     return row[0] if row and row[0] else "citizen"
+
+
+def get_staff_usernames() -> list:
+    """Vraća listu korisničkih imena sa admin/officer privilegijama."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT username
+        FROM users
+        WHERE is_admin = 1 OR lower(role) IN ('admin', 'officer')
+        ORDER BY username COLLATE NOCASE ASC
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [row[0] for row in rows if row and row[0]]
 
 
 def is_user_admin(username):

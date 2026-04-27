@@ -323,6 +323,14 @@ def dms_request_page() -> None:
         db.close()
 
 
+if __name__ == "__main__":
+    submit_tab, my_tab = st.tabs(["Podnesi zahtjev", "Moji zahtjevi"])
+    with submit_tab:
+        dms_request_page()
+    with my_tab:
+        my_requests_page()
+
+
 def my_requests_page() -> None:
     st.title("Moji zahtjevi")
 

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
@@ -12,13 +13,16 @@ from dotenv import load_dotenv
 
 from database.database import (
     authenticate_user,
+    clear_login_failures,
     cleanup_expired_sessions,
     create_user_session,
     create_user,
     get_user_city,
     get_user_email,
+    get_login_block_status,
     is_user_admin,
     init_db,
+    record_login_failure,
     revoke_all_user_sessions,
     revoke_user_session,
     set_user_city,
@@ -36,6 +40,8 @@ SESSION_FILE = BASE_DIR / "data" / "session.json"
 LOG_DIR = BASE_DIR / "logs"
 DEFAULT_ADMIN_USERS = "admin,rapoz"
 REMEMBER_SESSION_DAYS = 7
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW_MINUTES = 15
 
 
 load_dotenv()
@@ -175,9 +181,18 @@ def render_auth_page() -> None:
     st.title("Digitalizacija MUP usluga")
     st.caption("Diplomski MVP: DMS za polu-digitalne i potpuno digitalne administrativne servise")
 
-    login_tab, register_tab = st.tabs(["Prijava", "Registracija"])
+    if "auth_mode" not in st.session_state:
+        st.session_state.auth_mode = "Prijava"
 
-    with login_tab:
+    st.session_state.auth_mode = st.radio(
+        "Izaberite opciju",
+        ["Prijava", "Sign up"],
+        index=0 if st.session_state.auth_mode == "Prijava" else 1,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    if st.session_state.auth_mode == "Prijava":
         with st.form("login_form"):
             username = st.text_input("Korisnicko ime")
             password = st.text_input("Lozinka", type="password")
@@ -188,26 +203,57 @@ def render_auth_page() -> None:
             if submit:
                 if not username or not password:
                     st.warning("Unesite korisnicko ime i lozinku.")
-                elif not authenticate_user(username, password):
-                    st.error("Pogresni kredencijali.")
                 else:
-                    if logout_others:
-                        revoke_all_user_sessions(username)
+                    normalized_username = username.strip()
+                    block_status = get_login_block_status(
+                        normalized_username,
+                        max_attempts=LOGIN_MAX_ATTEMPTS,
+                        window_minutes=LOGIN_WINDOW_MINUTES,
+                    )
 
-                    st.session_state.user = username
-                    st.session_state.user_city = get_user_city(username)
-                    st.session_state.user_email = get_user_email(username)
-                    st.session_state.is_admin = is_admin_user(username)
+                    if block_status["blocked"]:
+                        retry_minutes = max(1, int((block_status["retry_after_seconds"] + 59) / 60))
+                        st.error(
+                            f"Previse neuspjelih pokusaja. Pokusajte ponovo za {retry_minutes} min."
+                        )
+                        return
+
+                    if not authenticate_user(normalized_username, password):
+                        record_login_failure(normalized_username)
+                        refreshed = get_login_block_status(
+                            normalized_username,
+                            max_attempts=LOGIN_MAX_ATTEMPTS,
+                            window_minutes=LOGIN_WINDOW_MINUTES,
+                        )
+                        if refreshed["blocked"]:
+                            retry_minutes = max(1, int((refreshed["retry_after_seconds"] + 59) / 60))
+                            st.error(
+                                f"Previse neuspjelih pokusaja. Pokusajte ponovo za {retry_minutes} min."
+                            )
+                        else:
+                            attempts_left = refreshed.get("attempts_left", 0)
+                            st.error(f"Pogresni kredencijali. Preostalo pokusaja: {attempts_left}.")
+                        return
+
+                    clear_login_failures(normalized_username)
+                    if logout_others:
+                        revoke_all_user_sessions(normalized_username)
+
+                    st.session_state.user = normalized_username
+                    st.session_state.user_city = get_user_city(normalized_username)
+                    st.session_state.user_email = get_user_email(normalized_username)
+                    st.session_state.is_admin = is_admin_user(normalized_username)
                     if remember:
-                        persist_session(username)
+                        persist_session(normalized_username)
                     st.success("Uspjesna prijava.")
                     st.rerun()
 
-    with register_tab:
+    else:
         with st.form("register_form"):
             username = st.text_input("Novo korisnicko ime")
             email = st.text_input("Email")
             municipality = st.selectbox("Opstina", get_all_municipalities())
+            id_card_number = st.text_input("Broj licne karte (opciono)")
             password = st.text_input("Lozinka", type="password")
             password_repeat = st.text_input("Potvrda lozinke", type="password")
             submit = st.form_submit_button("Registruj nalog", use_container_width=True)
@@ -215,17 +261,28 @@ def render_auth_page() -> None:
             if submit:
                 if not username or not email or not password:
                     st.warning("Popunite sva obavezna polja.")
+                elif not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", username.strip()):
+                    st.error("Korisnicko ime mora imati 3-32 karaktera (slova, brojevi, _, -, .).")
+                elif not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email.strip()):
+                    st.error("Email format nije validan.")
                 elif password != password_repeat:
                     st.error("Lozinke se ne poklapaju.")
                 elif len(password) < 6:
                     st.error("Lozinka mora imati najmanje 6 karaktera.")
                 elif not validate_municipality(municipality):
                     st.error("Izabrana opstina nije validna.")
-                elif not create_user(username, password, email):
-                    st.error("Korisnicko ime vec postoji.")
+                elif not create_user(
+                    username=username,
+                    password=password,
+                    email=email,
+                    city=municipality,
+                    id_card_number=id_card_number,
+                ):
+                    st.error("Registracija nije uspjela. Provjerite podatke ili izaberite drugo korisnicko ime/email.")
                 else:
-                    set_user_city(username, municipality)
+                    st.session_state.auth_mode = "Prijava"
                     st.success("Nalog je kreiran. Mozete se prijaviti.")
+                    st.rerun()
 
 
 def _open_submit_with_prefill(group: str, request_type: str) -> None:
@@ -287,26 +344,65 @@ def render_dashboard() -> None:
 
 
 def render_help_assistant() -> None:
-    from dms_core.dms_ai import get_dms_aware_response
+    from dms_core.dms_ai import get_dms_aware_response_with_source
 
     st.title("Pomoc i FAQ")
-    st.caption("Jednostavan asistent nad DMS pravilima")
+    st.caption("AI chatbot za DMS pravila, dokumenta, takse i statuse")
 
-    question = st.text_input(
-        "Postavite pitanje",
-        placeholder="Npr. Koja dokumenta trebam za registraciju apartmana?",
-    )
+    if "faq_chat_history" not in st.session_state:
+        st.session_state.faq_chat_history = [
+            {
+                "role": "assistant",
+                "content": (
+                    "Tu sam da pomognem oko MUP i turizam zahtjeva. "
+                    "Mozete pitati za dokumenta, takse, rokove ili pracenje statusa."
+                ),
+            }
+        ]
 
-    if st.button("Dobij odgovor", type="primary") and question.strip():
-        db = SessionLocal()
-        try:
-            answer = get_dms_aware_response(question.strip(), db)
-            st.markdown(answer)
-        except Exception:
-            logger.exception("FAQ assistant failed")
-            st.error("Trenutno nije moguce dobiti odgovor. Pokusajte ponovo.")
-        finally:
-            db.close()
+    action_col, _ = st.columns([1, 4])
+    with action_col:
+        if st.button("Ocisti chat"):
+            st.session_state.faq_chat_history = st.session_state.faq_chat_history[:1]
+            st.rerun()
+
+    for message in st.session_state.faq_chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            if message.get("role") == "assistant" and message.get("source") in {"llm", "fallback"}:
+                source_label = "LLM" if message["source"] == "llm" else "DMS fallback"
+                st.caption(f"Izvor odgovora: {source_label}")
+
+    prompt = st.chat_input("Postavite pitanje (npr. Sta mi treba za pasos?)")
+    if not prompt:
+        return
+
+    st.session_state.faq_chat_history.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Analiziram pitanje..."):
+            db = SessionLocal()
+            try:
+                answer, source = get_dms_aware_response_with_source(
+                    prompt.strip(),
+                    db,
+                    chat_history=st.session_state.faq_chat_history[:-1],
+                )
+                st.markdown(answer)
+                source_label = "LLM" if source == "llm" else "DMS fallback"
+                st.caption(f"Izvor odgovora: {source_label}")
+                st.session_state.faq_chat_history.append(
+                    {"role": "assistant", "content": answer, "source": source}
+                )
+            except Exception:
+                logger.exception("FAQ assistant failed")
+                fallback = "Trenutno nije moguce dobiti odgovor. Pokusajte ponovo."
+                st.error(fallback)
+                st.session_state.faq_chat_history.append({"role": "assistant", "content": fallback})
+            finally:
+                db.close()
 
 
 def render_sidebar() -> None:
