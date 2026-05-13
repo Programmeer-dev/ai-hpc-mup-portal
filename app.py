@@ -28,6 +28,7 @@ from database.database import (
     set_user_city,
     validate_user_session,
 )
+from dms_core import DmsManager, RequestStatus
 from dms_core.init_dms import init_dms_database, init_dms_templates
 from dms_core.models import DocumentTemplate, SessionLocal
 from municipality_utils import get_all_municipalities, validate_municipality
@@ -52,6 +53,48 @@ st.set_page_config(
     page_icon="📋",
     layout="wide",
 )
+
+
+def _inject_css() -> None:
+    st.markdown(
+        """
+        <style>
+        /* ---- globalni font i pozadina ---- */
+        html, body, [class*="css"] { font-family: 'Segoe UI', sans-serif; }
+
+        /* ---- auth header banner ---- */
+        .mup-banner {
+            background: linear-gradient(135deg, #003087 0%, #0057b8 100%);
+            color: white;
+            padding: 28px 32px 20px 32px;
+            border-radius: 10px;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        .mup-banner h1 { margin: 0; font-size: 1.9rem; font-weight: 700; letter-spacing: 0.5px; }
+        .mup-banner p  { margin: 6px 0 0 0; font-size: 0.95rem; opacity: 0.85; }
+
+        /* ---- stat kartice na dashboardu ---- */
+        div[data-testid="metric-container"] {
+            background: #f8f9fc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 14px 18px;
+        }
+
+        /* ---- status badge (koristi se u my_requests) ---- */
+        .status-badge {
+            display: inline-block;
+            padding: 3px 11px;
+            border-radius: 12px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            line-height: 1.6;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -178,7 +221,15 @@ def bootstrap_data() -> None:
 
 
 def render_auth_page() -> None:
-    st.title("Digitalizacija MUP usluga")
+    st.markdown(
+        """
+        <div class="mup-banner">
+            <h1>🏛️ MUP CG — Digitalni portal</h1>
+            <p>Upravljanje dokumentima i administrativnim zahtjevima | Crna Gora</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.caption("Diplomski MVP: DMS za polu-digitalne i potpuno digitalne administrativne servise")
 
     if "auth_mode" not in st.session_state:
@@ -295,6 +346,36 @@ def _open_submit_with_prefill(group: str, request_type: str) -> None:
 def render_dashboard() -> None:
     st.title("Korisnicki portal")
     st.markdown("### Pregled digitalnih servisa")
+
+    db = SessionLocal()
+    dms = DmsManager(db)
+    try:
+        user_requests = dms.get_user_requests(st.session_state.user)
+    finally:
+        db.close()
+
+    pending_action = [r for r in user_requests if r.status == RequestStatus.PENDING_USER]
+    active = [
+        r for r in user_requests
+        if r.status not in {RequestStatus.COMPLETED, RequestStatus.REJECTED, RequestStatus.DRAFT}
+    ]
+    completed = [r for r in user_requests if r.status == RequestStatus.COMPLETED]
+
+    if pending_action:
+        for req in pending_action:
+            req_label = req.request_type.value.replace("_", " ").title()
+            st.warning(
+                f"Zahtjev #{req.id} ({req_label}) čeka vašu dopunu dokumentacije. "
+                "Otvorite 'Moji zahtjevi' da odgovorite.",
+                icon="⚠️",
+            )
+
+    sc1, sc2, sc3 = st.columns(3)
+    sc1.metric("Ukupno zahtjeva", len(user_requests))
+    sc2.metric("Aktivni zahtjevi", len(active))
+    sc3.metric("Čeka vašu akciju", len(pending_action))
+
+    st.divider()
 
     col1, col2 = st.columns(2)
 
@@ -453,6 +534,7 @@ def render_main_router() -> None:
 
 
 def main() -> None:
+    _inject_css()
     init_session_state()
     bootstrap_data()
     restore_session()

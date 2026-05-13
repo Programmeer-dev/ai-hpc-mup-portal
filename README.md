@@ -1,3 +1,29 @@
+# DMS MUP Portal — Diplomski rad
+
+Prototip sistema za upravljanje dokumentima (Document Management System) za MUP Crne Gore.  
+Implementirano u Pythonu: **Streamlit + SQLAlchemy + SQLite**.
+
+## Brzo pokretanje
+
+```bash
+# Aktiviraj virtualno okruženje
+.\.venv\Scripts\Activate.ps1          # Windows PowerShell
+# source .venv/bin/activate           # macOS/Linux
+
+# Instaliraj zavisnosti (samo prvi put)
+pip install -r requirements.txt
+
+# Pokreni aplikaciju
+streamlit run app.py
+```
+
+Otvori `http://localhost:8501` u browseru.
+
+**Admin nalog:** registruj korisnika `admin` kroz UI — automatski dobija admin prava.  
+**AI chatbot (opciono):** postavi `ANTHROPIC_API_KEY=sk-...` u `.env` fajlu.
+
+---
+
 # Digitalization of MUP Services Through a DMS
 
 This project is a diploma MVP that demonstrates how Montenegro-style administrative services can be digitalized through a Document Management System (DMS).

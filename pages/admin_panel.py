@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from database.database import is_user_admin, validate_user_session
+from database.database import get_user_role, is_user_admin, validate_user_session
 from database.database import get_staff_usernames
 from dms_core import DmsManager, RequestStatus, RequestType, RequestPriority
 from dms_core.models import DmsRequest, SessionLocal
@@ -230,20 +230,68 @@ def _request_option_label(req: DmsRequest) -> str:
     return f"#{req.id} | {req.request_type.value} | {req.user_id} | {req.status.value}"
 
 
-def admin_dashboard() -> None:
-    st.title("Admin/Officer panel")
+def _render_officer_view() -> None:
+    """Pojednostavljen panel za officers — vide samo svoje dodijeljene predmete."""
+    st.title("Officer panel")
+    st.caption(f"Prijavljeni kao: {st.session_state.user}")
 
+    db = SessionLocal()
+    dms = DmsManager(db)
+    try:
+        tab_mine, tab_all = st.tabs(["Moji predmeti", "Svi aktivni"])
+
+        with tab_mine:
+            mine = dms.get_assigned_requests(st.session_state.user)
+            if not mine:
+                st.info("Nemate aktivnih dodijeljenih predmeta.")
+            else:
+                st.caption(f"Dodijeljeno vam: {len(mine)} predmeta")
+                chosen = st.selectbox(
+                    "Odaberite predmet",
+                    options=mine,
+                    format_func=_request_option_label,
+                    key="officer_mine_select",
+                )
+                _render_request_detail(chosen, dms)
+
+        with tab_all:
+            active = dms.get_active_requests()
+            if not active:
+                st.info("Nema aktivnih zahtjeva u sistemu.")
+            else:
+                for req in active:
+                    assigned = req.assigned_to or "—"
+                    col1, col2, col3 = st.columns([3, 2, 2])
+                    col1.write(f"#{req.id} — {req.request_type.value}")
+                    col2.write(_status_label(req.status))
+                    col3.write(f"Dodijeljeno: {assigned}")
+    finally:
+        db.close()
+
+
+def admin_dashboard() -> None:
     _restore_admin_session_if_possible()
 
     if not st.session_state.get("is_admin"):
         st.error("Nemate pristup ovoj sekciji.")
         return
 
+    user_role = get_user_role(st.session_state.user)
+    is_superadmin = st.session_state.user in _get_admin_users() or user_role == "admin"
+
+    if not is_superadmin:
+        _render_officer_view()
+        return
+
+    st.title("Admin panel")
+
     db = SessionLocal()
     dms = DmsManager(db)
 
     try:
-        tab_dashboard, tab_queue, tab_archive = st.tabs(["Dashboard", "Aktivni zahtjevi", "Arhiva"])
+        tab_dashboard, tab_queue, tab_mine, tab_archive = st.tabs(
+            ["Dashboard", "Aktivni zahtjevi", "Moji predmeti", "Arhiva"]
+        )
 
         with tab_dashboard:
             st.markdown("### KPI pregled")
@@ -426,6 +474,20 @@ def admin_dashboard() -> None:
                 )
                 _render_request_detail(chosen, dms)
 
+        with tab_mine:
+            mine = dms.get_assigned_requests(st.session_state.user)
+            if not mine:
+                st.info("Nemate aktivnih dodijeljenih predmeta.")
+            else:
+                st.caption(f"Dodijeljeno vam: {len(mine)} predmeta")
+                chosen_mine = st.selectbox(
+                    "Odaberite predmet",
+                    options=mine,
+                    format_func=_request_option_label,
+                    key="admin_mine_select",
+                )
+                _render_request_detail(chosen_mine, dms)
+
         with tab_archive:
             completed = db.query(DmsRequest).filter(
                 DmsRequest.status.in_([RequestStatus.COMPLETED, RequestStatus.REJECTED])
@@ -553,6 +615,8 @@ def _render_request_detail(request, dms: DmsManager) -> None:
                 dms.db.commit()
 
             st.success("Status je ažuriran.")
+            if request.user_email:
+                st.info(f"📧 Notifikacija poslana korisniku: {request.user_email} — novi status: {_status_label(new_status)}")
             st.rerun()
         except ValueError as exc:
             st.error(str(exc))

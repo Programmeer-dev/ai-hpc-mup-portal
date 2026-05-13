@@ -11,6 +11,14 @@ from dms_core.models import (
     DocumentTemplate, RequestStatusHistory, RequestComment, TourismProperty
 )
 from municipality_utils import validate_municipality
+from database.database import get_staff_usernames
+
+
+_TOURISM_TYPES = {
+    RequestType.TURIZAM_REGISTRACIJA,
+    RequestType.TURIZAM_LICENCA,
+    RequestType.TURIZAM_DOZVOLA_GRADNJE,
+}
 
 
 class DmsManager:
@@ -69,18 +77,69 @@ class DmsManager:
     # ============= WORKFLOW STATUS =============
     
     def submit_request(self, request_id: int, changed_by: str = None) -> bool:
-        """Podnesi zahtjev (DRAFT → SUBMITTED)"""
+        """Podnesi zahtjev: DRAFT → SUBMITTED → automatski UNDER_REVIEW ako postoji slobodan službenik."""
         request = self._get_request(request_id)
         if not request:
             return False
 
         request.submitted_at = datetime.now()
-        return self._change_status(
+        success = self._change_status(
             request_id,
             RequestStatus.SUBMITTED,
             changed_by=changed_by,
-            reason="Korisnik je podnio zahtjev"
+            reason="Korisnik je podnio zahtjev",
         )
+
+        if success:
+            self._auto_assign(request_id, submitted_by=changed_by)
+
+        return success
+
+    def _auto_assign(self, request_id: int, submitted_by: str = None) -> bool:
+        """Pronađi najmanje opterećenog službenika i prebaci zahtjev u UNDER_REVIEW."""
+        try:
+            staff = get_staff_usernames()
+        except Exception:
+            self.logger.warning("Auto-assign: nije moguće učitati listu službenika")
+            return False
+
+        if not staff:
+            self.logger.info("Auto-assign: nema registrovanih službenika, request_id=%s ostaje SUBMITTED", request_id)
+            return False
+
+        active_statuses = [RequestStatus.SUBMITTED, RequestStatus.UNDER_REVIEW, RequestStatus.PENDING_USER]
+
+        # Izbjegni dodjelu istom korisniku koji je podnio (npr. admin demo)
+        candidates = [o for o in staff if o != submitted_by] or list(staff)
+
+        workload = {}
+        for officer in candidates:
+            workload[officer] = self.db.query(DmsRequest).filter(
+                DmsRequest.assigned_to == officer,
+                DmsRequest.status.in_(active_statuses),
+            ).count()
+
+        assigned_to = min(workload, key=workload.get)
+
+        request = self._get_request(request_id)
+        if not request:
+            return False
+
+        request.assigned_to = assigned_to
+        self.db.commit()
+
+        self._change_status(
+            request_id,
+            RequestStatus.UNDER_REVIEW,
+            changed_by="sistem",
+            reason=f"Automatski dodijeljeno službeniku {assigned_to} (aktivnih predmeta: {workload[assigned_to]})",
+        )
+
+        self.logger.info(
+            "Auto-assign: request_id=%s → officer=%s (active=%s)",
+            request_id, assigned_to, workload[assigned_to],
+        )
+        return True
     
     def start_review(self, request_id: int, assigned_to: str) -> bool:
         """Počni pregled (SUBMITTED → UNDER_REVIEW)"""
@@ -269,13 +328,20 @@ class DmsManager:
             if not allowed_user_transition:
                 raise PermissionError("Nemate dozvolu za ovu promjenu statusa.")
 
-        return self._change_status(
+        result = self._change_status(
             request_id=request_id,
             new_status=new_status,
             changed_by=changed_by,
             reason=reason,
         )
-    
+
+        if result and new_status == RequestStatus.APPROVED:
+            req = self._get_request(request_id)
+            if req:
+                self._finalize_tourism_registration(req)
+
+        return result
+
     # ============= DOKUMENTA =============
     
     def upload_document(self, request_id: int, doc_name: str, file_path: str) -> bool:
@@ -367,9 +433,41 @@ class DmsManager:
         
         self.db.add(property)
         self.db.commit()
-        
+
         return property
-    
+
+    def _finalize_tourism_registration(self, request: DmsRequest) -> None:
+        """Kreira TourismProperty zapis tek kad je turistički zahtjev odobren (ne na submit)."""
+        if request.request_type not in _TOURISM_TYPES:
+            return
+
+        details = request.details or {}
+        address = details.get("property_address", "")
+        city = details.get("property_city", "")
+        if not address or not city:
+            self.logger.warning(
+                "Turizam finalizacija preskočena — nedostaje adresa/grad, request_id=%s", request.id
+            )
+            return
+
+        existing = self.db.query(TourismProperty).filter_by(
+            registration_request_id=request.id
+        ).first()
+        if existing:
+            return
+
+        self.register_tourism_property(
+            request_id=request.id,
+            owner_id=request.user_id,
+            property_type="turizam_objekat",
+            address=address,
+            city=city,
+            capacity=int(details.get("capacity", 1)),
+            rooms=int(details.get("rooms", 1)),
+            amenities=[],
+        )
+        self.logger.info("Turizam nekretnina finalizovana za request_id=%s", request.id)
+
     # ============= PRETRAGA I FILTRIRANJE =============
     
     def get_user_requests(self, user_id: str) -> List[DmsRequest]:

@@ -115,6 +115,24 @@ def _format_status(status: RequestStatus) -> str:
     return labels.get(status, status.value)
 
 
+def _status_badge(status: RequestStatus) -> str:
+    palette = {
+        RequestStatus.DRAFT:        ("#6c757d", "#fff"),
+        RequestStatus.SUBMITTED:    ("#0d6efd", "#fff"),
+        RequestStatus.UNDER_REVIEW: ("#fd7e14", "#fff"),
+        RequestStatus.PENDING_USER: ("#6f42c1", "#fff"),
+        RequestStatus.APPROVED:     ("#198754", "#fff"),
+        RequestStatus.REJECTED:     ("#dc3545", "#fff"),
+        RequestStatus.COMPLETED:    ("#0a7275", "#fff"),
+    }
+    label = _format_status(status)
+    bg, fg = palette.get(status, ("#6c757d", "#fff"))
+    return (
+        f'<span class="status-badge" '
+        f'style="background:{bg};color:{fg};">{label}</span>'
+    )
+
+
 def _render_template_info(db, request_type: RequestType) -> Optional[DocumentTemplate]:
     template = db.query(DocumentTemplate).filter_by(request_type=request_type.value).first()
     if not template:
@@ -285,18 +303,6 @@ def dms_request_page() -> None:
                             out.write(file.getbuffer())
                         dms.upload_document(request.id, doc_name=safe_name, file_path=str(file_path))
 
-                    if not is_semi_digital and details.get("property_address"):
-                        dms.register_tourism_property(
-                            request_id=request.id,
-                            owner_id=st.session_state.user,
-                            property_type="turizam_objekat",
-                            address=details["property_address"],
-                            city=details["property_city"],
-                            capacity=details["capacity"],
-                            rooms=details["rooms"],
-                            amenities=[],
-                        )
-
                     dms.add_comment(
                         request_id=request.id,
                         author=st.session_state.user,
@@ -311,7 +317,10 @@ def dms_request_page() -> None:
                         status=request.status.value,
                     )
 
-                    st.success(f"Zahtjev #{request.id} je uspješno podnesen.")
+                    st.success(f"Zahtjev #{request.id} je uspješno podnesen i automatski dodijeljen službeniku na obradu.")
+                    user_email = st.session_state.get("user_email") or ""
+                    if user_email:
+                        st.info(f"📧 Potvrda zahtjeva poslana na: {user_email}")
                     st.info("Status i komunikaciju pratite u sekciji 'Moji zahtjevi'.")
                     st.session_state.current_view = "requests"
                     st.rerun()
@@ -321,14 +330,6 @@ def dms_request_page() -> None:
 
     finally:
         db.close()
-
-
-if __name__ == "__main__":
-    submit_tab, my_tab = st.tabs(["Podnesi zahtjev", "Moji zahtjevi"])
-    with submit_tab:
-        dms_request_page()
-    with my_tab:
-        my_requests_page()
 
 
 def my_requests_page() -> None:
@@ -366,7 +367,10 @@ def my_requests_page() -> None:
                     st.markdown(f"### #{request.id} - {request.request_type.value.replace('_', ' ').title()}")
                     st.caption(f"Podnesen: {request.created_at.strftime('%d.%m.%Y %H:%M')}")
                 with c2:
-                    st.write(f"Status: {_format_status(request.status)}")
+                    st.markdown(
+                        f"Status: {_status_badge(request.status)}",
+                        unsafe_allow_html=True,
+                    )
                 with c3:
                     st.write(f"Tip toka: {mode_label}")
 
@@ -433,3 +437,11 @@ def my_requests_page() -> None:
 
     finally:
         db.close()
+
+
+if __name__ == "__main__":
+    submit_tab, my_tab = st.tabs(["Podnesi zahtjev", "Moji zahtjevi"])
+    with submit_tab:
+        dms_request_page()
+    with my_tab:
+        my_requests_page()
