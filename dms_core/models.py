@@ -103,7 +103,16 @@ class DmsRequest(Base):
     # Napomene
     notes = Column(Text, nullable=True)
     rejection_reason = Column(Text, nullable=True)
-    
+
+    # Plaćanje takse (mock)
+    payment_status = Column(String, nullable=True)  # not_required | pending | paid
+    payment_reference = Column(String, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
+
+    # e-Potpis odluke (PDF rješenje)
+    signed_pdf_path = Column(String, nullable=True)
+    signature_hash = Column(String, nullable=True)
+
     # Connections
     status_history = relationship("RequestStatusHistory", back_populates="request", cascade="all, delete-orphan")
     comments = relationship("RequestComment", back_populates="request", cascade="all, delete-orphan")
@@ -113,21 +122,25 @@ class DmsRequest(Base):
 
 
 class RequestStatusHistory(Base):
-    """Istorija promjena statusa zahtjeva"""
+    """Istorija promjena statusa zahtjeva sa tamper-evident hash chain."""
     __tablename__ = 'request_status_history'
-    
+
     id = Column(Integer, primary_key=True)
     request_id = Column(Integer, ForeignKey('dms_requests.id'), nullable=False)
-    
+
     from_status = Column(Enum(RequestStatus), nullable=False)
     to_status = Column(Enum(RequestStatus), nullable=False)
-    
+
     changed_by = Column(String, nullable=True)  # Ko je promijenio
     changed_at = Column(DateTime, default=datetime.now)
     reason = Column(Text, nullable=True)
-    
+
+    # Hash chain: entry_hash = sha256(prev_hash || serializovana sadržina)
+    prev_hash = Column(String, nullable=True)
+    entry_hash = Column(String, nullable=True)
+
     request = relationship("DmsRequest", back_populates="status_history")
-    
+
     def __repr__(self):
         return f"<StatusChange {self.from_status.value} → {self.to_status.value}>"
 

@@ -332,6 +332,59 @@ def dms_request_page() -> None:
         db.close()
 
 
+def _render_payment_widget(request, dms) -> None:
+    """Mock plaćanje takse — prikazuje se samo ako je status 'pending'."""
+    status = request.payment_status or ""
+    if status == "not_required" or not status:
+        return
+
+    fee = dms.get_processing_fee(request.id)
+    if status == "paid":
+        ref = request.payment_reference or "-"
+        paid_at = request.paid_at.strftime("%d.%m.%Y %H:%M") if request.paid_at else "-"
+        st.success(f"Taksa plaćena ({fee:.2f} EUR). Referenca: {ref} • {paid_at}")
+        return
+
+    st.warning(f"Taksa nije plaćena. Iznos: {fee:.2f} EUR")
+    if st.button("Plati taksu (demo)", key=f"pay_btn_{request.id}"):
+        ref = dms.mark_payment_paid(request.id, paid_by=st.session_state.user)
+        if ref:
+            st.success(f"Uplata zabilježena. Referenca: {ref}")
+            st.rerun()
+        else:
+            st.info("Plaćanje nije bilo potrebno za ovaj predmet.")
+
+
+def _render_signed_decision(request) -> None:
+    """Ako predmet ima generisano potpisano rješenje, ponudi preuzimanje."""
+    if not request.signed_pdf_path:
+        return
+
+    path = Path(request.signed_pdf_path)
+    if not path.exists():
+        return
+
+    suffix = path.suffix.lower()
+    mime = "application/pdf" if suffix == ".pdf" else "text/html"
+    file_label = "PDF rješenje" if suffix == ".pdf" else "HTML rješenje"
+
+    with open(path, "rb") as fh:
+        data = fh.read()
+
+    sig_hash_short = (request.signature_hash or "")[:16]
+    st.info(
+        f"📜 Digitalno potpisano {file_label} dostupno. "
+        f"Hash dokumenta: {sig_hash_short}…"
+    )
+    st.download_button(
+        f"Preuzmi {file_label}",
+        data=data,
+        file_name=path.name,
+        mime=mime,
+        key=f"download_decision_{request.id}",
+    )
+
+
 def my_requests_page() -> None:
     st.title("Moji zahtjevi")
 
@@ -378,6 +431,9 @@ def my_requests_page() -> None:
                     st.warning("Za ovu uslugu je potreban fizički dolazak u završnoj fazi.")
                 else:
                     st.success("Za ovu uslugu proces se vodi digitalno do kraja.")
+
+                _render_payment_widget(request, dms)
+                _render_signed_decision(request)
 
                 with st.expander("Detalji zahtjeva"):
                     st.write(f"Razlog: {request.reason or '-'}")

@@ -105,9 +105,35 @@ def init_dms_templates(db: Session, mup_rules_path: str, turizam_path: str):
 
 
 def init_dms_database(db_session: Session):
-    """Kreira sve DMS tabele"""
+    """Kreira sve DMS tabele i primjenjuje lake migracije za nove kolone."""
     Base.metadata.create_all(engine)
+    _apply_lightweight_migrations(db_session)
     print("[OK] DMS baza podataka inicijalizirana")
+
+
+def _apply_lightweight_migrations(db_session: Session) -> None:
+    """Primijeni ALTER TABLE za nove kolone (idempotentno)."""
+    from sqlalchemy import text
+
+    # request_status_history: hash chain
+    _safe_add_column(db_session, "request_status_history", "prev_hash", "VARCHAR")
+    _safe_add_column(db_session, "request_status_history", "entry_hash", "VARCHAR")
+
+    # dms_requests: payment i e-signature meta
+    _safe_add_column(db_session, "dms_requests", "payment_status", "VARCHAR")
+    _safe_add_column(db_session, "dms_requests", "payment_reference", "VARCHAR")
+    _safe_add_column(db_session, "dms_requests", "paid_at", "DATETIME")
+    _safe_add_column(db_session, "dms_requests", "signed_pdf_path", "VARCHAR")
+    _safe_add_column(db_session, "dms_requests", "signature_hash", "VARCHAR")
+
+
+def _safe_add_column(db_session: Session, table: str, column: str, col_type: str) -> None:
+    from sqlalchemy import text
+    try:
+        db_session.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+        db_session.commit()
+    except Exception:
+        db_session.rollback()  # kolona vjerovatno već postoji
 
 
 if __name__ == "__main__":

@@ -3,27 +3,21 @@ import csv
 import io
 import json
 import logging
-import os
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-from database.database import get_user_role, is_user_admin, validate_user_session
+from database.database import validate_user_session
 from database.database import get_staff_usernames
 from dms_core import DmsManager, RequestStatus, RequestType, RequestPriority
 from dms_core.models import DmsRequest, SessionLocal
+from permissions import Role, get_effective_role, has_admin_access
 
 
 logger = logging.getLogger("dms_portal.admin")
 BASE_DIR = Path(__file__).resolve().parent.parent
 SESSION_FILE = BASE_DIR / "data" / "session.json"
-DEFAULT_ADMIN_USERS = "admin,rapoz"
-
-
-def _get_admin_users() -> set:
-    raw = os.getenv("APP_ADMIN_USERS", DEFAULT_ADMIN_USERS)
-    return {item.strip() for item in raw.split(",") if item.strip()}
 
 
 def _restore_admin_session_if_possible() -> None:
@@ -43,7 +37,8 @@ def _restore_admin_session_if_possible() -> None:
             return
 
         st.session_state.user = username
-        st.session_state.is_admin = is_user_admin(username) or username in _get_admin_users()
+        st.session_state.user_role = get_effective_role(username).value
+        st.session_state.is_admin = has_admin_access(username)
     except Exception:
         logger.exception("Admin page session restore failed")
 
@@ -276,8 +271,8 @@ def admin_dashboard() -> None:
         st.error("Nemate pristup ovoj sekciji.")
         return
 
-    user_role = get_user_role(st.session_state.user)
-    is_superadmin = st.session_state.user in _get_admin_users() or user_role == "admin"
+    effective_role = get_effective_role(st.session_state.user)
+    is_superadmin = effective_role == Role.ADMIN
 
     if not is_superadmin:
         _render_officer_view()
@@ -531,6 +526,38 @@ def _render_request_detail(request, dms: DmsManager) -> None:
 
     st.markdown("#### Audit export")
     audit_payload = dms.build_audit_pack(request.id)
+    chain_info = audit_payload.get("audit_chain", {})
+    if chain_info.get("legacy"):
+        st.info(
+            f"ℹ️ Audit log iz pre-hash ere ({chain_info.get('total_entries', 0)} unosa). "
+            "Nove tranzicije će biti zaštićene hash chain-om."
+        )
+    elif chain_info.get("valid"):
+        st.success(
+            f"✅ Hash chain validan ({chain_info.get('total_entries', 0)} unosa). "
+            "Audit log nije modifikovan."
+        )
+    else:
+        broken_id = chain_info.get("broken_at")
+        st.error(f"⚠️ Hash chain nije validan — prekid kod unosa #{broken_id}.")
+
+    if request.payment_status:
+        status_map = {
+            "not_required": "Nije potrebno",
+            "pending": "Neplaćeno",
+            "paid": "Plaćeno",
+        }
+        st.caption(
+            f"Plaćanje: {status_map.get(request.payment_status, request.payment_status)}"
+            + (f" • Ref: {request.payment_reference}" if request.payment_reference else "")
+        )
+
+    if request.signed_pdf_path and request.signature_hash:
+        st.caption(
+            f"E-potpis rješenja: hash {request.signature_hash[:16]}… "
+            f"({Path(request.signed_pdf_path).name})"
+        )
+
     st.download_button(
         "Preuzmi audit JSON",
         data=json.dumps(audit_payload, ensure_ascii=False, indent=2),

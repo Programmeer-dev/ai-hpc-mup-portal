@@ -1,12 +1,10 @@
 import json
 import logging
-import os
 import re
 import secrets
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Set
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -20,7 +18,6 @@ from database.database import (
     get_user_city,
     get_user_email,
     get_login_block_status,
-    is_user_admin,
     init_db,
     record_login_failure,
     revoke_all_user_sessions,
@@ -31,15 +28,16 @@ from database.database import (
 from dms_core import DmsManager, RequestStatus
 from dms_core.init_dms import init_dms_database, init_dms_templates
 from dms_core.models import DocumentTemplate, SessionLocal
+from dms_core.notifications import list_notifications, mark_all_read, unread_count
 from municipality_utils import get_all_municipalities, validate_municipality
 from pages.admin_panel import admin_dashboard
 from pages.dms_requests import dms_request_page, my_requests_page
+from permissions import Role, get_effective_role, has_admin_access
 
 
 BASE_DIR = Path(__file__).resolve().parent
 SESSION_FILE = BASE_DIR / "data" / "session.json"
 LOG_DIR = BASE_DIR / "logs"
-DEFAULT_ADMIN_USERS = "admin,rapoz"
 REMEMBER_SESSION_DAYS = 7
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_WINDOW_MINUTES = 15
@@ -113,6 +111,7 @@ def init_session_state() -> None:
         "user_city": None,
         "user_email": None,
         "is_admin": False,
+        "user_role": Role.CITIZEN.value,
         "current_view": "dashboard",
         "prefill_group": None,
         "prefill_request_type": None,
@@ -122,13 +121,8 @@ def init_session_state() -> None:
             st.session_state[key] = value
 
 
-def get_admin_users() -> Set[str]:
-    raw = os.getenv("APP_ADMIN_USERS", DEFAULT_ADMIN_USERS)
-    return {item.strip() for item in raw.split(",") if item.strip()}
-
-
 def is_admin_user(username: str) -> bool:
-    return is_user_admin(username) or username in get_admin_users()
+    return has_admin_access(username)
 
 
 def restore_session() -> None:
@@ -159,6 +153,7 @@ def restore_session() -> None:
             st.session_state.session_token = token
             st.session_state.user_city = get_user_city(username)
             st.session_state.user_email = get_user_email(username)
+            st.session_state.user_role = get_effective_role(username).value
             st.session_state.is_admin = is_admin_user(username)
     except Exception:
         # Ignore stale or invalid session file to keep startup robust.
@@ -195,6 +190,7 @@ def clear_session(clear_all_tokens: bool = True) -> None:
     st.session_state.user_city = None
     st.session_state.user_email = None
     st.session_state.is_admin = False
+    st.session_state.user_role = Role.CITIZEN.value
     st.session_state.current_view = "dashboard"
     st.session_state.prefill_group = None
     st.session_state.prefill_request_type = None
@@ -220,6 +216,64 @@ def bootstrap_data() -> None:
         db.close()
 
 
+def _render_eid_login() -> None:
+    """Mock eID flow — simulira odabir digitalnog sertifikata."""
+    from dms_core.eid_mock import issue_session_token, list_demo_certificates
+
+    st.info(
+        "Demo eID prijava: izaberite digitalni sertifikat iz simuliranog čitača. "
+        "U realnom sistemu bi se otvorio nativni prompt za PIN/biometriju."
+    )
+
+    certificates = list_demo_certificates()
+    options = [f"{cert['subject_name']} ({cert['username']})" for cert in certificates]
+
+    selected_idx = st.selectbox(
+        "Sertifikat iz čitača",
+        options=list(range(len(certificates))),
+        format_func=lambda idx: options[idx],
+        key="eid_cert_select",
+    )
+
+    if not st.button("Potpiši i prijavi se", use_container_width=True, type="primary"):
+        return
+
+    cert = certificates[selected_idx]
+    username = cert.get("username")
+    email = cert.get("email")
+    city = cert.get("city") or "Podgorica"
+    id_card = cert.get("id_card_number")
+    role = cert.get("role", "citizen")
+
+    # Auto-kreiraj nalog ako ne postoji (random password — eID je primarni mehanizam)
+    if not get_user_email(username):
+        random_password = secrets.token_urlsafe(24)
+        created = create_user(
+            username=username,
+            password=random_password,
+            email=email,
+            city=city,
+            id_card_number=id_card,
+            role=role,
+        )
+        if not created:
+            st.error("Auto-registracija preko eID-a nije uspjela.")
+            return
+
+    token = issue_session_token(cert)
+    logger.info("eID mock login user=%s token=%s", username, token[:12])
+
+    st.session_state.user = username
+    st.session_state.user_city = get_user_city(username) or city
+    st.session_state.user_email = get_user_email(username) or email
+    st.session_state.user_role = get_effective_role(username).value
+    st.session_state.is_admin = is_admin_user(username)
+    persist_session(username)
+
+    st.success(f"eID prijava uspješna kao {cert['subject_name']}.")
+    st.rerun()
+
+
 def render_auth_page() -> None:
     st.markdown(
         """
@@ -235,10 +289,14 @@ def render_auth_page() -> None:
     if "auth_mode" not in st.session_state:
         st.session_state.auth_mode = "Prijava"
 
+    auth_modes = ["Prijava", "Sign up", "eID (demo)"]
+    if st.session_state.auth_mode not in auth_modes:
+        st.session_state.auth_mode = "Prijava"
+
     st.session_state.auth_mode = st.radio(
         "Izaberite opciju",
-        ["Prijava", "Sign up"],
-        index=0 if st.session_state.auth_mode == "Prijava" else 1,
+        auth_modes,
+        index=auth_modes.index(st.session_state.auth_mode),
         horizontal=True,
         label_visibility="collapsed",
     )
@@ -293,11 +351,15 @@ def render_auth_page() -> None:
                     st.session_state.user = normalized_username
                     st.session_state.user_city = get_user_city(normalized_username)
                     st.session_state.user_email = get_user_email(normalized_username)
+                    st.session_state.user_role = get_effective_role(normalized_username).value
                     st.session_state.is_admin = is_admin_user(normalized_username)
                     if remember:
                         persist_session(normalized_username)
                     st.success("Uspjesna prijava.")
                     st.rerun()
+
+    elif st.session_state.auth_mode == "eID (demo)":
+        _render_eid_login()
 
     else:
         with st.form("register_form"):
@@ -490,17 +552,33 @@ def render_sidebar() -> None:
     with st.sidebar:
         st.markdown("## DMS Navigacija")
         st.caption(f"Korisnik: {st.session_state.user}")
+
+        role_label = {
+            Role.CITIZEN.value: "Građanin",
+            Role.OFFICER.value: "Službenik",
+            Role.ADMIN.value: "Administrator",
+        }.get(st.session_state.user_role, "Građanin")
+        st.caption(f"Uloga: {role_label}")
+
         if st.session_state.user_city:
             st.caption(f"Opstina: {st.session_state.user_city}")
+
+        unread = unread_count(st.session_state.user)
+        inbox_label = "Obavjestenja"
+        if unread:
+            inbox_label = f"Obavjestenja ({unread})"
 
         options = [
             ("dashboard", "Dashboard"),
             ("submit", "Podnesi zahtjev"),
             ("requests", "Moji zahtjevi"),
+            ("inbox", inbox_label),
             ("faq", "Pomoc/FAQ"),
         ]
-        if st.session_state.is_admin:
-            options.append(("admin", "Admin/Officer panel"))
+        if st.session_state.user_role == Role.OFFICER.value:
+            options.append(("admin", "Officer panel"))
+        elif st.session_state.user_role == Role.ADMIN.value:
+            options.append(("admin", "Admin panel"))
 
         labels = {value: label for value, label in options}
         reverse = {label: value for value, label in options}
@@ -519,6 +597,30 @@ def render_sidebar() -> None:
             st.rerun()
 
 
+def render_inbox() -> None:
+    st.title("Obavještenja")
+    if st.button("Označi sve kao pročitano"):
+        mark_all_read(st.session_state.user)
+        st.rerun()
+
+    items = list_notifications(st.session_state.user, only_unread=False, limit=50)
+    if not items:
+        st.info("Nemate obavještenja.")
+        return
+
+    for item in items:
+        is_unread = item.get("read_at") is None
+        container = st.container(border=True)
+        with container:
+            badge = "🔵 " if is_unread else "⚪ "
+            st.markdown(f"### {badge}{item['title']}")
+            st.caption(item["created_at"])
+            if item.get("body"):
+                st.write(item["body"])
+            if item.get("request_id"):
+                st.caption(f"Predmet #{item['request_id']}")
+
+
 def render_main_router() -> None:
     view = st.session_state.current_view
     if view == "dashboard":
@@ -527,6 +629,8 @@ def render_main_router() -> None:
         dms_request_page()
     elif view == "requests":
         my_requests_page()
+    elif view == "inbox":
+        render_inbox()
     elif view == "faq":
         render_help_assistant()
     elif view == "admin":

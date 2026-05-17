@@ -3,6 +3,7 @@ Document Management System Manager
 Upravljanje zahtjevima kroz kompletan workflow
 """
 
+import hashlib
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -12,6 +13,35 @@ from dms_core.models import (
 )
 from municipality_utils import validate_municipality
 from database.database import get_staff_usernames
+from dms_core.notifications import notify
+from dms_core.signature import generate_signed_decision
+
+
+_STATUS_LABELS_HR = {
+    RequestStatus.DRAFT: "Nacrt",
+    RequestStatus.SUBMITTED: "Podnesen",
+    RequestStatus.UNDER_REVIEW: "U obradi",
+    RequestStatus.PENDING_USER: "Čeka korisnika",
+    RequestStatus.APPROVED: "Odobren",
+    RequestStatus.REJECTED: "Odbijen",
+    RequestStatus.COMPLETED: "Završen",
+}
+
+
+def _hash_history_entry(prev_hash: str, request_id: int, from_status: str,
+                        to_status: str, changed_by: str, changed_at: str,
+                        reason: str) -> str:
+    """Deterministički SHA-256 nad serijalizovanom sadržinom + prethodni hash."""
+    payload = "|".join([
+        prev_hash or "",
+        str(request_id),
+        from_status or "",
+        to_status or "",
+        changed_by or "",
+        changed_at or "",
+        reason or "",
+    ])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 _TOURISM_TYPES = {
@@ -52,7 +82,14 @@ class DmsManager:
         template = self.db.query(DocumentTemplate).filter(
             DocumentTemplate.request_type == request_type.value
         ).first()
-        
+
+        # Procijeni trajanje iz istorije (po tipu); fallback na template
+        template_days = template.estimated_days if template else 15
+        estimated_days = self._estimate_days_for_type(request_type, fallback=template_days)
+
+        fee = float(template.processing_fee_eur or 0) if template else 0.0
+        payment_status = "pending" if fee > 0 else "not_required"
+
         request = DmsRequest(
             request_type=request_type,
             user_id=user_id,
@@ -64,9 +101,8 @@ class DmsManager:
             status=RequestStatus.DRAFT,
             priority=RequestPriority.MEDIUM,
             required_documents=template.required_documents if template else [],
-            estimated_completion=datetime.now() + timedelta(
-                days=template.estimated_days if template else 15
-            )
+            estimated_completion=datetime.now() + timedelta(days=estimated_days),
+            payment_status=payment_status,
         )
         
         self.db.add(request)
@@ -259,16 +295,37 @@ class DmsManager:
 
         request.status = new_status
         request.updated_at = datetime.now()
-        
-        # Spremi u istoriju
+
+        # Hash chain: nadovezi se na zadnji red u istoriji
+        last_entry = (
+            self.db.query(RequestStatusHistory)
+            .filter(RequestStatusHistory.request_id == request_id)
+            .order_by(RequestStatusHistory.id.desc())
+            .first()
+        )
+        prev_hash = last_entry.entry_hash if last_entry and last_entry.entry_hash else ""
+        changed_at = datetime.now()
+        entry_hash = _hash_history_entry(
+            prev_hash=prev_hash,
+            request_id=request_id,
+            from_status=old_status.value if old_status else "",
+            to_status=new_status.value,
+            changed_by=changed_by,
+            changed_at=changed_at.isoformat(),
+            reason=reason or "",
+        )
+
         history = RequestStatusHistory(
             request_id=request_id,
             from_status=old_status,
             to_status=new_status,
             changed_by=changed_by,
-            reason=reason
+            changed_at=changed_at,
+            reason=reason,
+            prev_hash=prev_hash or None,
+            entry_hash=entry_hash,
         )
-        
+
         self.db.add(history)
         self.db.commit()
         self.logger.info(
@@ -278,8 +335,39 @@ class DmsManager:
             new_status.value,
             changed_by,
         )
-        
+
+        # Pošalji notifikaciju korisniku ako je promjena javna
+        if changed_by != request.user_id:
+            self._notify_status_change(request, old_status, new_status, reason)
+
         return True
+
+    def _notify_status_change(
+        self,
+        request: DmsRequest,
+        old_status: RequestStatus,
+        new_status: RequestStatus,
+        reason: Optional[str],
+    ) -> None:
+        new_label = _STATUS_LABELS_HR.get(new_status, new_status.value)
+        title = f"Zahtjev #{request.id}: novi status — {new_label}"
+        body_lines = [
+            f"Tip zahtjeva: {request.request_type.value}",
+            f"Prethodni status: {_STATUS_LABELS_HR.get(old_status, old_status.value)}",
+            f"Novi status: {new_label}",
+        ]
+        if reason:
+            body_lines.append(f"Napomena: {reason}")
+        try:
+            notify(
+                username=request.user_id,
+                title=title,
+                body="\n".join(body_lines),
+                request_id=request.id,
+                email=request.user_email,
+            )
+        except Exception:
+            self.logger.exception("Notifikacija nije poslana request_id=%s", request.id)
 
     def _is_transition_allowed(self, old_status: RequestStatus, new_status: RequestStatus) -> bool:
         allowed = {
@@ -339,8 +427,101 @@ class DmsManager:
             req = self._get_request(request_id)
             if req:
                 self._finalize_tourism_registration(req)
+                self._generate_decision_document(req, officer_name=changed_by, reason=reason)
 
         return result
+
+    def _generate_decision_document(
+        self,
+        request: DmsRequest,
+        officer_name: str,
+        reason: Optional[str],
+    ) -> None:
+        """Pri odobravanju zahtjeva generiši potpisano rješenje i zabilježi hash."""
+        try:
+            request_type_label = request.request_type.value.replace("_", " ").title()
+            decision_lines = [
+                f"Zahtjev za uslugu '{request_type_label}' je odobren.",
+            ]
+            if reason:
+                decision_lines.append(f"Obrazloženje: {reason}")
+            if request.request_type in _TOURISM_TYPES:
+                decision_lines.append(
+                    "Korisnik je ovlašćen da otpočne sa pružanjem usluge u skladu sa registracijom."
+                )
+            else:
+                decision_lines.append(
+                    "Za preuzimanje fizičkog dokumenta očekujte instrukcije u sekciji 'Moji zahtjevi'."
+                )
+
+            file_path, sig_hash = generate_signed_decision(
+                request_id=request.id,
+                request_type=request_type_label,
+                citizen_name=request.user_id,
+                officer_name=officer_name or "Sistem",
+                decision_text="\n".join(decision_lines),
+            )
+
+            request.signed_pdf_path = file_path
+            request.signature_hash = sig_hash
+            self.db.commit()
+            self.logger.info(
+                "Decision document generated request_id=%s path=%s hash=%s",
+                request.id, file_path, sig_hash[:16],
+            )
+        except Exception:
+            self.logger.exception("Generisanje rješenja neuspjelo request_id=%s", request.id)
+
+    # ============= PLAĆANJE =============
+
+    def mark_payment_paid(
+        self,
+        request_id: int,
+        paid_by: str,
+        reference: Optional[str] = None,
+    ) -> Optional[str]:
+        """Označi taksu kao plaćenu i vrati referencu uplate.
+
+        Mock implementacija — u realnom sistemu bi se zvao payment gateway.
+        """
+        request = self._get_request(request_id)
+        if not request:
+            return None
+
+        if request.payment_status == "not_required":
+            return None
+
+        if request.payment_status == "paid":
+            return request.payment_reference
+
+        ref = reference or f"PAY-{request_id}-{int(datetime.now().timestamp())}"
+        request.payment_status = "paid"
+        request.payment_reference = ref
+        request.paid_at = datetime.now()
+        request.updated_at = datetime.now()
+        self.db.commit()
+
+        self.add_comment(
+            request_id=request_id,
+            author=paid_by or request.user_id,
+            content=f"Taksa plaćena. Referenca uplate: {ref}",
+            author_type="user" if paid_by == request.user_id else "system",
+            is_internal=False,
+        )
+        self.logger.info("Payment marked paid request_id=%s ref=%s by=%s", request_id, ref, paid_by)
+        return ref
+
+    def get_processing_fee(self, request_id: int) -> float:
+        """Vraća taksu iz templata za zadati predmet."""
+        request = self._get_request(request_id)
+        if not request:
+            return 0.0
+        template = self.db.query(DocumentTemplate).filter(
+            DocumentTemplate.request_type == request.request_type.value
+        ).first()
+        if not template:
+            return 0.0
+        return float(template.processing_fee_eur or 0)
 
     # ============= DOKUMENTA =============
     
@@ -840,6 +1021,61 @@ class DmsManager:
             "escalated": escalated,
         }
 
+    def verify_audit_chain(self, request_id: int) -> Dict:
+        """Provjeri integritet hash chain-a u istoriji statusa.
+
+        Vraća dict sa poljima:
+          - valid (bool)        : True ako su svi hashevi konzistentni
+          - total_entries (int) : ukupno redova provjereno
+          - broken_at (int|None): id reda gdje je lanac prekinut, ako postoji
+          - legacy (bool)       : True ako su svi unosi pre-hash-chain (bez hash polja)
+        """
+        history = (
+            self.db.query(RequestStatusHistory)
+            .filter(RequestStatusHistory.request_id == request_id)
+            .order_by(RequestStatusHistory.id.asc())
+            .all()
+        )
+
+        if not history:
+            return {"valid": True, "total_entries": 0, "broken_at": None, "legacy": False}
+
+        # Ako nijedan unos nema hash, predmet je iz ere prije hash chain-a
+        if all(row.entry_hash is None for row in history):
+            return {"valid": True, "total_entries": len(history), "broken_at": None, "legacy": True}
+
+        expected_prev = ""
+        for row in history:
+            # Preskoči legacy redove koji nemaju entry_hash, ali ne resetuj lanac
+            if row.entry_hash is None:
+                continue
+
+            stored_prev = row.prev_hash or ""
+            if stored_prev != expected_prev:
+                return {
+                    "valid": False, "total_entries": len(history),
+                    "broken_at": row.id, "legacy": False,
+                }
+
+            recomputed = _hash_history_entry(
+                prev_hash=stored_prev,
+                request_id=row.request_id,
+                from_status=row.from_status.value if row.from_status else "",
+                to_status=row.to_status.value if row.to_status else "",
+                changed_by=row.changed_by or "",
+                changed_at=row.changed_at.isoformat() if row.changed_at else "",
+                reason=row.reason or "",
+            )
+            if recomputed != row.entry_hash:
+                return {
+                    "valid": False, "total_entries": len(history),
+                    "broken_at": row.id, "legacy": False,
+                }
+
+            expected_prev = row.entry_hash
+
+        return {"valid": True, "total_entries": len(history), "broken_at": None, "legacy": False}
+
     def build_audit_pack(self, request_id: int) -> Dict:
         """Generiše audit izvještaj za pojedinačni predmet."""
         request = self._get_request(request_id)
@@ -889,9 +1125,12 @@ class DmsManager:
                     "changed_by": row.changed_by,
                     "changed_at": row.changed_at.isoformat() if row.changed_at else None,
                     "reason": row.reason,
+                    "prev_hash": row.prev_hash,
+                    "entry_hash": row.entry_hash,
                 }
                 for row in history_rows
             ],
+            "audit_chain": self.verify_audit_chain(request_id),
             "comments": [
                 {
                     "author": row.author,
@@ -904,6 +1143,42 @@ class DmsManager:
             ],
         }
     
+    def _estimate_days_for_type(
+        self,
+        request_type: RequestType,
+        fallback: int,
+        sample_size: int = 20,
+    ) -> int:
+        """Procijeni dane na osnovu prosjeka zadnjih završenih predmeta istog tipa.
+
+        Vraća prosjek ako postoji najmanje 3 uzorka; inače fallback na template.
+        """
+        completed = (
+            self.db.query(DmsRequest)
+            .filter(
+                DmsRequest.request_type == request_type,
+                DmsRequest.status == RequestStatus.COMPLETED,
+                DmsRequest.completed_at != None,
+                DmsRequest.submitted_at != None,
+            )
+            .order_by(DmsRequest.completed_at.desc())
+            .limit(sample_size)
+            .all()
+        )
+
+        if len(completed) < 3:
+            return max(1, int(fallback))
+
+        deltas = [(req.completed_at - req.submitted_at).days for req in completed]
+        deltas = [d for d in deltas if d >= 0]
+        if not deltas:
+            return max(1, int(fallback))
+
+        avg = sum(deltas) / len(deltas)
+        # Dodaj 20% margine kao buffer, zaokruži na cijeli dan
+        estimated = max(1, int(round(avg * 1.2)))
+        return estimated
+
     def _calculate_avg_completion_time(self) -> float:
         """Prosječne dane za završetak zahtjeva"""
         completed = self.db.query(DmsRequest).filter(

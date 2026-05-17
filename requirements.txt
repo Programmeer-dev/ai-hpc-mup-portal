@@ -7,3 +7,4 @@ plotly
 pandas
 python-docx
 pytest
+reportlab
